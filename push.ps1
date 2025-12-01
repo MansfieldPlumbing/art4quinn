@@ -29,10 +29,13 @@ foreach ($file in $existingFiles) {
 Write-Host "Current highest ID is: Q$("{0:D6}" -f $maxNum)" -ForegroundColor Yellow
 
 # 3. FIND & RENAME NEW FILES
-# Get files that match extensions BUT do not match the Q000000 pattern
+# Get files that match extensions BUT:
+# - Do not match the Q000000 pattern
+# - Are NOT the icon.png file (THIS IS THE CRITICAL FIX)
 $newFiles = Get-ChildItem | Where-Object { 
     ($extensions -contains $_.Extension.ToLower()) -and 
-    ($_.Name -notmatch "^Q\d{6}") 
+    ($_.Name -notmatch "^Q\d{6}") -and
+    ($_.Name -ne "icon.png")
 } | Sort-Object CreationTime
 
 if ($newFiles.Count -gt 0) {
