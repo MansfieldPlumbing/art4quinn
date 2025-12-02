@@ -14,19 +14,12 @@
     <link rel="apple-touch-icon" href="icon.png">
     <link rel="icon" type="image/png" href="icon.png">
 
+    <!-- LIBRARIES FOR ZIPPING DOWNLOADS -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
     
     <style>
-        /* IMPORT CUSTOM FONT FROM BACKUP */
-        @font-face {
-            font-family: 'Qaz';
-            src: url('Qaz.woff') format('woff');
-            font-weight: normal;
-            font-style: normal;
-            font-display: swap;
-        }
-
+        /* STANDARD SYSTEM FONTS ONLY */
         :root { 
             --bg: #111111; 
             --panel: #1a1a1a; 
@@ -40,8 +33,7 @@
         body { 
             background-color: var(--bg); 
             color: var(--text-main); 
-            /* RESTORED QAZ FONT */
-            font-family: 'Qaz', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
             margin: 0; padding: 0; 
             display: flex; flex-direction: column; height: 100vh; overflow: hidden; 
             -webkit-tap-highlight-color: transparent; 
@@ -50,7 +42,6 @@
         header { background-color: rgba(17, 17, 17, 0.95); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); height: 60px; padding: 0 15px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; -webkit-user-select: none; user-select: none; }
         header.selection-mode { background-color: #2a2240; }
         
-        /* RESTORED BRANDING */
         .brand { font-weight: 700; font-size: 1.4rem; letter-spacing: 1px; color: var(--brand-color); }
         .brand span { color: var(--accent); font-weight: 400; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
         
@@ -72,7 +63,7 @@
         .card img.loaded, .card video.loaded { opacity: 1; }
         
         .card-checkbox { position: absolute; top: 8px; left: 8px; width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.7); background: rgba(0,0,0,0.3); z-index: 10; display: flex; align-items: center; justify-content: center; }
-        .card-checkbox::after { content: "Γ£ô"; color: white; font-size: 14px; display: none; font-family: sans-serif; }
+        .card-checkbox::after { content: "✓"; color: white; font-size: 14px; display: none; font-family: sans-serif; }
         .card.selected .card-checkbox { background: var(--accent); border-color: var(--accent); }
         .card.selected .card-checkbox::after { display: block; }
         .card.selected img, .card.selected video { transform: scale(0.95); opacity: 0.8; }
@@ -81,7 +72,7 @@
         .video-icon { position: absolute; bottom: 8px; right: 8px; color: white; background: rgba(0,0,0,0.5); padding: 5px; border-radius: 5px; pointer-events: none; }
 
         #loader-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); z-index: 200; transition: opacity 0.5s; }
-        #loader-text { color: var(--brand-color); font-family: 'Qaz', monospace; font-size: 3rem; font-weight: 400; text-align: center; animation: pulse 1.5s infinite; }
+        #loader-text { color: var(--brand-color); font-family: monospace; font-size: 3rem; font-weight: 400; text-align: center; animation: pulse 1.5s infinite; }
         #scan-status { margin-top: 10px; color: var(--text-dim); font-size: 0.9rem; font-family: monospace; }
         @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; text-shadow: 0 0 20px rgba(57, 255, 20, 0.5); } 100% { opacity: 0.6; } }
 
@@ -101,7 +92,7 @@
     <div class="brand">Q <span>// GALLERY</span></div>
     <div class="selection-controls">
         <div style="display: flex; align-items: center; gap: 10px;">
-            <button class="action-btn" onclick="clearSelection()">Γ£ò</button>
+            <button class="action-btn" onclick="clearSelection()">✕</button>
             <span class="count-display" id="selection-count">0</span>
         </div>
         <div style="display: flex; gap: 10px;">
