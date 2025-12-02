@@ -1,4 +1,4 @@
-const CACHE_NAME = 'art4quinn-v1';
+const CACHE_NAME = 'q-gallery-v2';
 const urlsToCache = [
   './',
   './index.html',
