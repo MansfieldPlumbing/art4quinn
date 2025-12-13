@@ -1,23 +1,27 @@
 <#
     .SYNOPSIS
-    Automated Gallery Updater for Q Project (push.ps1) - Version 3
+    Automated Gallery Updater for Q Project (push.ps1) - Version 4 (Conflict Proof)
 #>
 
 # 1. SETUP & LOCATION
 Set-Location $PSScriptRoot
-Write-Host "--- Q GALLERY AUTOMATION V3 ---" -ForegroundColor Green
+Write-Host "--- Q GALLERY AUTOMATION V4 ---" -ForegroundColor Green
 
 # CONFIG
 $extensions = @(".png", ".jpg", ".jpeg", ".mp4", ".webm", ".gif")
 $repoUrl = "https://github.com/MansfieldPlumbing/art4quinn.git"
 
-# CHECK TOKEN
+# CHECK TOKEN (With Fallback)
 if (-not $env:GITHUB_PAT) {
-    Write-Warning "GITHUB_PAT environment variable is MISSING."
-    Write-Warning "You may need to enter credentials manually, or restart your terminal if you just set it."
+    Write-Warning "GITHUB_PAT env var is missing in this session."
+    $manualToken = Read-Host "Please paste your GitHub Token here (or press Enter to try manual login)"
+    if ($manualToken) {
+        $env:GITHUB_PAT = $manualToken
+    }
 }
 
-# 2. FIND HIGHEST EXISTING NUMBER
+# 2. FIND & RENAME NEW FILES
+# We do this first so new files are ready
 $existingFiles = Get-ChildItem | Where-Object { $_.Name -match "^Q(\d{6})" }
 $maxNum = 0
 foreach ($file in $existingFiles) {
@@ -26,9 +30,7 @@ foreach ($file in $existingFiles) {
         if ($num -gt $maxNum) { $maxNum = $num }
     }
 }
-Write-Host "Current highest ID is: Q$("{0:D6}" -f $maxNum)" -ForegroundColor Yellow
 
-# 3. FIND & RENAME NEW FILES
 $newFiles = Get-ChildItem | Where-Object { 
     ($extensions -contains $_.Extension.ToLower()) -and 
     ($_.Name -notmatch "^Q\d{6}") -and
@@ -36,31 +38,17 @@ $newFiles = Get-ChildItem | Where-Object {
 } | Sort-Object CreationTime
 
 if ($newFiles.Count -gt 0) {
-    Write-Host "Found $($newFiles.Count) new files to process..." -ForegroundColor Cyan
+    Write-Host "Renaming $($newFiles.Count) new files..." -ForegroundColor Cyan
     foreach ($file in $newFiles) {
         $maxNum++
         $newName = "Q{0:D6}{1}" -f $maxNum, $file.Extension.ToLower()
-        try {
-            Rename-Item -Path $file.FullName -NewName $newName -ErrorAction Stop
-            Write-Host "Renamed: $($file.Name) -> $newName" -ForegroundColor Gray
-        } catch {
-            Write-Error "Failed to rename $($file.Name). Check if file is open."
-            exit
-        }
+        Rename-Item -Path $file.FullName -NewName $newName -ErrorAction Stop
+        Write-Host "Renamed: $($file.Name) -> $newName" -ForegroundColor Gray
     }
 }
 
-# 4. RUN PYTHON INDEXER (USING UV)
-Write-Host "`nUpdating CSV Index..." -ForegroundColor Green
-try {
-    uv run generate_lot.py
-} catch {
-    Write-Error "UV execution failed. Is uv installed?"
-    exit
-}
-
-# 5. SYNC WITH GITHUB (PULL THEN PUSH)
-Write-Host "`nSyncing with GitHub..." -ForegroundColor Green
+# 3. SYNC: PULL *BEFORE* GENERATING CSV
+Write-Host "`nFetching latest changes from GitHub..." -ForegroundColor Green
 
 # Prepare Auth URL
 if ($env:GITHUB_PAT) {
@@ -69,31 +57,40 @@ if ($env:GITHUB_PAT) {
     $authUrl = $repoUrl
 }
 
-# A. COMMIT LOCAL CHANGES
-$status = git status --porcelain
-if ($status) {
-    git add .
-    git commit -m "Auto-Update: Added new content and updated index"
-    Write-Host "Local changes committed." -ForegroundColor Gray
-}
-
-# B. PULL REMOTE CHANGES (Fixes 'fetch first' errors)
-Write-Host "Pulling latest changes..." -ForegroundColor Gray
+# Pull latest state. If lot.csv conflicts, we don't care because we will overwrite it in Step 4.
 git pull $authUrl
 if ($LASTEXITCODE -ne 0) {
-    Write-Warning "Pull encountered an issue (likely a merge conflict). Trying to push anyway..."
+    Write-Warning "Pull had issues. Resetting lot.csv to ensure clean generation..."
+    git checkout lot.csv
 }
 
-# C. PUSH TO REMOTE
-Write-Host "Pushing to GitHub..." -ForegroundColor Gray
-git push $authUrl
+# 4. RUN PYTHON INDEXER (UV)
+Write-Host "Updating CSV Index..." -ForegroundColor Green
+try {
+    uv run generate_lot.py
+} catch {
+    Write-Error "UV execution failed."
+    exit
+}
 
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "`nSUCCESS! Gallery is live." -ForegroundColor Green
+# 5. COMMIT & PUSH
+Write-Host "Pushing to GitHub..." -ForegroundColor Green
+$status = git status --porcelain
+
+if ($status) {
+    git add .
+    git commit -m "Auto-Update: Q$("{0:D6}" -f $maxNum)"
+    git push $authUrl
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "`nSUCCESS! Gallery is live." -ForegroundColor Green
+    } else {
+        Write-Host "`nGit Push failed. Check your Token permissions." -ForegroundColor Red
+    }
 } else {
-    Write-Host "`nGit Push failed." -ForegroundColor Red
+    Write-Host "Everything is already up to date." -ForegroundColor Yellow
 }
 
-# Pause so you can see the result
+# Pause
 Write-Host "`nDone."
 Read-Host "Press Enter to close"
