@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Dev Explorer</title>
+<style>
+  body { font-family: sans-serif; background: white; margin: 0; padding: 20px; }
+  h1 { color: #333; font-size: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 15px; }
+  .card { border: 1px solid #ccc; padding: 15px; border-radius: 8px; cursor: pointer; text-align: center; }
+  .card:hover { background: #f0f0f0; }
+</style>
+</head>
+<body>
+  <h1>Dev Explorer</h1>
+  <div class="grid">
+    <div class="card" onclick="window.parent.postMessage('close-applet', '*')">Close Applet</div>
+    <div class="card">Network Stats</div>
+    <div class="card">System Logs</div>
+  </div>
+</body>
+</html>

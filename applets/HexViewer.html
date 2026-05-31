@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Hex Viewer</title>
+<style>
+  body { background: #1e1e1e; color: #d4d4d4; font-family: monospace; padding: 20px; }
+  .grid { display: grid; grid-template-columns: 80px 1fr 200px; gap: 20px; font-size: 14px; }
+  .offset { color: #569cd6; }
+  .hex { color: #ce9178; }
+  .ascii { color: #6a9955; }
+</style>
+</head>
+<body>
+  <h2>Hex Editor / Viewer - <button onclick="window.parent.postMessage('close-applet', '*')">Close</button></h2>
+  <div class="grid">
+    <div class="offset">
+      00000000<br>00000010<br>00000020
+    </div>
+    <div class="hex">
+      4D 5A 90 00 03 00 00 00 04 00 00 00 FF FF 00 00<br>
+      B8 00 00 00 00 00 00 00 40 00 00 00 00 00 00 00<br>
+      00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    </div>
+    <div class="ascii">
+      MZ........ÿÿ..<br>
+      ¸.......@.......<br>
+      ................
+    </div>
+  </div>
+</body>
+</html>

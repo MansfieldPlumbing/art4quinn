@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/art4quinn/sw.js', { scope: '/art4quinn/' })})}
