@@ -1,0 +1,1 @@
+cmd /k powershell.exe -File "A:\Projects\Q\push.ps1"
