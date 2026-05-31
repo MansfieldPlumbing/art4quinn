@@ -8,6 +8,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
+    base: '/art4quinn/',
     plugins: [
       react(), 
       tailwindcss(),
@@ -55,3 +56,4 @@ export default defineConfig(({mode}) => {
     },
   };
 });
+
