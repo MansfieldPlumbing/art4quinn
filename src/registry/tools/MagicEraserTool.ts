@@ -79,7 +79,7 @@ export const MagicEraserTool: ToolDef = {
     try {
       // 1. Initialize ONNX Session for LaMA
       // Automatically download from HuggingFace and cache to device
-      let modelData: ArrayBuffer | string = '/models/lama.onnx';
+      let modelData: ArrayBuffer | string = './models/lama.onnx';
       try {
         const MODEL_URL = 'https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama.onnx';
         const cache = await caches.open('flickpaint-models');
@@ -205,3 +205,4 @@ export const MagicEraserTool: ToolDef = {
     }
   }
 };
+

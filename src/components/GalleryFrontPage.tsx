@@ -19,7 +19,7 @@ export default function GalleryFrontPage() {
   useEffect(() => {
     async function loadAssets() {
       try {
-        const res = await fetch('/gallery/lot.csv?t=' + Date.now());
+        const res = await fetch('./gallery/lot.csv?t=' + Date.now());
         const text = await res.text();
         const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
         
@@ -33,7 +33,7 @@ export default function GalleryFrontPage() {
 
         const assetList: Asset[] = valid.map((filename) => ({
           name: filename,
-          url: `/gallery/${filename}`,
+          url: `./gallery/${filename}`,
           type: filename.match(/\.(mp4|webm)$/i) ? 'video' : 'image'
         }));
 
@@ -81,7 +81,7 @@ export default function GalleryFrontPage() {
         </div>
         
         <button 
-          onClick={() => handleSelectAsset('/gallery/Q000001.png')} 
+          onClick={() => handleSelectAsset('./gallery/Q000001.png')} 
           className="hidden sm:flex items-center gap-2 px-5 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-full text-sm font-medium transition-all hover:scale-105 active:scale-95"
         >
           Blank Canvas
@@ -167,3 +167,4 @@ export default function GalleryFrontPage() {
     </div>
   );
 }
+
