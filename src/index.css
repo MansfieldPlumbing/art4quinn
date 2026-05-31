@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+::-webkit-scrollbar {
+  display: none;
+}
+
+body {
+  margin: 0;
+  overscroll-behavior: none;
+  overflow: hidden;
+}
+
+* {
+  scrollbar-width: none;
+  -webkit-touch-callout: none;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.custom-scrollbar {
+  scrollbar-width: none;
+}
+
+/* FlexLayout dark theme customizations for bg-neutral-900 */
+.flexlayout__layout {
+  background-color: transparent;
+}
+.flexlayout__tabset {
+  background-color: transparent;
+}
+.flexlayout__tabset_header {
+  background-color: transparent;
+}
+.flexlayout__tabset_tabbar_outer {
+  background-color: transparent;
+  border: none !important;
+}
+.flexlayout__tabset_tabbar_outer_top {
+  border-bottom: none !important;
+}
+.flexlayout__tabset_tabbar_outer_bottom {
+  border-top: none !important;
+}
+.flexlayout__tab_button_trailing {
+  display: none !important;
+}
+.flexlayout__tab_toolbar {
+  display: none !important;
+}
+.flexlayout__tab_button_overflow {
+  display: none !important;
+}
+.flexlayout__tabset-selected {
+  background-color: transparent;
+  background-image: none;
+}
+.flexlayout__tab {
+  background-color: transparent;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.flexlayout__tab_button {
+  background-color: rgba(255,255,255,0.02);
+  color: rgba(255,255,255,0.5);
+}
+.flexlayout__tab_button--selected {
+  background-color: rgba(255,255,255,0.08);
+  color: white;
+}
+.flexlayout__edge_rect {
+  display: block;
+}
+.flexlayout__splitter {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  transition: background-color 0.2s ease;
+  position: relative;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+}
+.flexlayout__splitter::before {
+  content: "";
+  display: block;
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 99px;
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  transition: transform 0.2s, background-color 0.2s;
+}
+.flexlayout__splitter:hover::before, .flexlayout__splitter_drag::before {
+  background-color: rgba(255, 255, 255, 0.5);
+  transform: scale(1.5);
+}
+.flexlayout__border {
+  background-color: transparent !important;
+}
+.flexlayout__splitter:hover, .flexlayout__splitter_drag {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+}
+.flexlayout__border_button {
+  display: block;
+}
+.flexlayout__tabset_tabbar_inner {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  box-sizing: border-box;
+}
+.flexlayout__splitter_drag {
+  background-color: #6366f1; /* indigo-500 */
+}
+.flexlayout__tab_button_trailing {
+  display: none;
+}
