@@ -1,0 +1,22 @@
+{
+  "_comment": "Quinn's cast for the flickpaint3d studio. Each entry is a T-pose model sheet (flat gray ~140 bg, keyed out to a silhouette -> grounded, paintable 3D standee). Paths are relative to this page (public/three/) and resolve to the shared gallery at ../gallery, i.e. /art4quinn/gallery/ once deployed.",
+  "characters": [
+    { "id": "pink-kitty",      "name": "Pink Kitty",         "front": "../gallery/Q000029.png" },
+    { "id": "pink-kitty-a",    "name": "Pink Kitty (arms)",  "front": "../gallery/Q000028.png" },
+    { "id": "pink-kitty-kick", "name": "Pink Kitty (kick)",  "front": "../gallery/Q000030.png" },
+    { "id": "blue-bot",        "name": "Blue Bot",           "front": "../gallery/Q000034.png", "back": "../gallery/Q000035.png" },
+    { "id": "blue-bot-back",   "name": "Blue Bot (back)",    "front": "../gallery/Q000035.png" },
+    { "id": "hero-kid",        "name": "Hero Kid",           "front": "../gallery/Q000036.png", "back": "../gallery/Q000037.png" },
+    { "id": "hero-kid-back",   "name": "Hero Kid (back)",    "front": "../gallery/Q000037.png" },
+    { "id": "red-eyes",        "name": "Red-Eyes",           "front": "../gallery/Q000038.png" },
+    { "id": "beret-guy",       "name": "Beret Guy",          "front": "../gallery/Q000039.png" },
+    { "id": "pink-heart",      "name": "Pink Heart-Head",    "front": "../gallery/Q000040.png" },
+    { "id": "red-heart",       "name": "Red Heart-Head",     "front": "../gallery/Q000041.png" },
+    { "id": "blue-bonk",       "name": "Blue Bonk",          "front": "../gallery/Q000042.jpg" },
+    { "id": "paper-bag",       "name": "Paper-Bag Head",     "front": "../gallery/Q000043.png" },
+    { "id": "midnight-kitty",  "name": "Midnight Kitty",     "front": "../gallery/Q000044.png" },
+    { "id": "midnight-kitty-2","name": "Midnight Kitty 2",   "front": "../gallery/Q000045.png" },
+    { "id": "blue-dress",      "name": "Blue Dress Girl",    "front": "../gallery/Q000046.png", "back": "../gallery/Q000047.png" },
+    { "id": "blue-dress-back", "name": "Blue Dress (back)",  "front": "../gallery/Q000047.png" }
+  ]
+}
