@@ -616,8 +616,34 @@ reg({ id: 'eraser', name: 'Eraser', type: 'paint', cursor: 'crosshair',
   onPointerMove(pt, c) { this._cfg(c.ctx, c); c.ctx.beginPath(); c.ctx.moveTo(_last.x, _last.y); c.ctx.lineTo(pt.x, pt.y); c.ctx.lineWidth = c.size * (pt.pressure || 1); c.ctx.stroke(); _last = { x: pt.x, y: pt.y }; },
   onPointerUp(pt, c) { c.ctx.globalCompositeOperation = 'source-over'; } });
 
-reg({ id: 'fill', name: 'Fill Layer', type: 'paint', cursor: 'crosshair',
-  onPointerDown(pt, c) { c.pushUndoState(); c.ctx.globalCompositeOperation = 'source-over'; c.ctx.globalAlpha = c.opacity / 100; c.ctx.fillStyle = c.color; c.ctx.fillRect(0, 0, c.canvas.width, c.canvas.height); },
+reg({ id: 'fill', name: 'Fill', type: 'paint', cursor: 'crosshair',
+  onPointerDown(pt, c) {
+    c.pushUndoState();
+    const g = c.ctx, W = c.canvas.width, H = c.canvas.height; if (W <= 0 || H <= 0) return;
+    const fillAlpha = c.opacity / 100, tol = session('tolerance');
+    g.globalCompositeOperation = 'source-over';
+    // tolerance maxed = flood the whole layer (the old "Fill Layer" behavior)
+    if (tol >= 120) { g.globalAlpha = fillAlpha; g.fillStyle = c.color; g.fillRect(0, 0, W, H); g.globalAlpha = 1; return; }
+    const sx = Math.round(pt.x), sy = Math.round(pt.y); if (sx < 0 || sx >= W || sy < 0 || sy >= H) return;
+    const img = g.getImageData(0, 0, W, H), d = img.data;
+    const si = (sy * W + sx) * 4, tR = d[si], tG = d[si + 1], tB = d[si + 2], tA = d[si + 3];
+    const hx = parseInt(c.color.slice(1), 16), fR = (hx >> 16) & 255, fG = (hx >> 8) & 255, fB = hx & 255, fA = Math.round(fillAlpha * 255);
+    const q = new Int32Array(W * H); let head = 0, tail = 0; const vis = new Uint8Array(W * H);
+    const s0 = sy * W + sx; q[tail++] = s0; vis[s0] = 1;
+    while (head < tail) {
+      const ci = q[head++], off = ci * 4;
+      d[off] = fR; d[off + 1] = fG; d[off + 2] = fB; d[off + 3] = fA;     // paint this cell
+      const cx = ci % W, cy = (ci / W) | 0;
+      const nb = [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]];
+      for (const [nx, ny] of nb) {
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+        const ni = ny * W + nx; if (vis[ni]) continue; vis[ni] = 1;
+        const so = ni * 4; const diff = Math.sqrt((d[so] - tR) ** 2 + (d[so + 1] - tG) ** 2 + (d[so + 2] - tB) ** 2 + (d[so + 3] - tA) ** 2);
+        if (diff <= tol) q[tail++] = ni;     // same-ish colour as the click point -> flood into it
+      }
+    }
+    g.putImageData(img, 0, 0);
+  },
   onPointerMove() {}, onPointerUp() {} });
 
 (() => {
@@ -694,7 +720,7 @@ reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
     const src = c.ctx.getImageData(0, 0, W, H).data; const dest = c.overlayCtx.createImageData(W, H); const dd = dest.data;
     const si = (sy * W + sx) * 4, tR = src[si], tG = src[si + 1], tB = src[si + 2], tA = src[si + 3];
     const q = new Int32Array(W * H); let head = 0, tail = 0; const vis = new Uint8Array(W * H);
-    const s0 = sy * W + sx; q[tail++] = s0; vis[s0] = 1; const tol = 42, maxP = 200000; let n = 0;
+    const s0 = sy * W + sx; q[tail++] = s0; vis[s0] = 1; const tol = session('tolerance'), maxP = 200000; let n = 0;
     let minX = W, maxX = 0, minY = H, maxY = 0;
     while (head < tail && n < maxP) {
       const ci = q[head++], cy = (ci / W) | 0, cx = ci % W; n++;
@@ -862,7 +888,7 @@ const History = (() => {
   return {
     push() { const st = grab(); if (!st.length) return; undo.push(st); if (undo.length > max) undo.shift(); redo = []; sync(); },
     clear() { undo = []; redo = []; sync(); },
-    undo() { if (undo.length <= 1) return; redo.push(grab()); undo.pop(); apply(undo[undo.length - 1]); sync(); },
+    undo() { if (undo.length <= 1) return; redo.push(grab()); apply(undo.pop()); sync(); },   // apply the POPPED (pre-edit) snapshot, like the TS HistoryManager — not the new top
     redo() { if (!redo.length) return; undo.push(grab()); apply(redo.pop()); sync(); },
   };
 })();
@@ -1045,11 +1071,13 @@ function buildLeft() {
     <div style="padding:12px;background:rgba(255,255,255,0.05);border-radius:12px;border:1px solid rgba(255,255,255,0.05);display:flex;flex-direction:column;gap:14px">
       <div class="row"><span class="muted" style="width:54px">Size</span><input type="range" min="1" max="200" id="ls-size" style="flex:1"><span class="mono" id="ls-size-v" style="width:38px;text-align:right"></span></div>
       <div class="row"><span class="muted" style="width:54px">Opacity</span><input type="range" min="1" max="100" id="ls-op" style="flex:1"><span class="mono" id="ls-op-v" style="width:38px;text-align:right"></span></div>
+      <div class="row" title="Fill bucket & Magic Wand spread (max = whole layer)"><span class="muted" style="width:54px">Tol.</span><input type="range" min="0" max="120" id="ls-tol" style="flex:1"><span class="mono" id="ls-tol-v" style="width:38px;text-align:right"></span></div>
     </div>`;
   $('#pane-brushes').querySelectorAll('[data-tool]').forEach((b) => b.onclick = () => setSession('tool', b.dataset.tool));
-  const lsSize = $('#ls-size'), lsOp = $('#ls-op');
+  const lsSize = $('#ls-size'), lsOp = $('#ls-op'), lsTol = $('#ls-tol');
   lsSize.oninput = () => setSession('brushSize', +lsSize.value);
   lsOp.oninput = () => setSession('opacity', +lsOp.value);
+  lsTol.oninput = () => setSession('tolerance', +lsTol.value);
 
   // Colors
   const sw = Sys.registry.Resolve('\\Catalog\\Swatches');
@@ -1062,6 +1090,7 @@ function buildLeft() {
     p.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('on', b.dataset.color === session('color')));
     lsSize.value = session('brushSize'); $('#ls-size-v').textContent = session('brushSize') + 'px';
     lsOp.value = session('opacity'); $('#ls-op-v').textContent = session('opacity') + '%';
+    lsTol.value = session('tolerance'); $('#ls-tol-v').textContent = session('tolerance') >= 120 ? 'All' : session('tolerance');
   });
   paintIcons(p);
 }
@@ -1095,8 +1124,9 @@ function buildRight() {
     </div>`;
 
   $('#layer-add').onclick = () => {
+    pushUndo();
     const id = Date.now(); Sys.vom.Register(layerPath(id), 'Layer', { id, name: `Layer ${getOrder().length + 1}`, visible: true, locked: false, alphaLocked: false, blendMode: 'Normal', opacity: 100 });
-    setOrder([id, ...getOrder()]); Sys.vom.Set(P.doc, 'activeLayerId', id); reconcileLayers(); pushUndo();
+    setOrder([id, ...getOrder()]); Sys.vom.Set(P.doc, 'activeLayerId', id); reconcileLayers();
   };
   $('#layer-del').onclick = () => { const order = getOrder(); if (order.length <= 1) return; const aid = doc('activeLayerId'); const next = order.filter((x) => x !== aid); Sys.vom.Unregister(layerPath(aid)); setOrder(next); Sys.vom.Set(P.doc, 'activeLayerId', next[0]); reconcileLayers(); };
   $('#layer-dup').onclick = () => {
@@ -1568,7 +1598,7 @@ function applyResize(nw, nh) {
 function persistSession() {
   if (Sys.mode !== 'standalone') return;
   try {
-    const keep = {}; ['tool', 'color', 'brushSize', 'opacity', 'thumbstickEnabled'].forEach((k) => keep[k] = session(k));
+    const keep = {}; ['tool', 'color', 'brushSize', 'opacity', 'tolerance', 'thumbstickEnabled'].forEach((k) => keep[k] = session(k));
     localStorage.setItem('flickpaint.session', JSON.stringify(keep));
   } catch (e) {}
 }
@@ -1579,6 +1609,7 @@ function boot() {
   Sys.vom.Register(P.session, 'Session', {
     tool: saved.tool || 'brush', color: saved.color || '#111827',
     brushSize: saved.brushSize || 18, opacity: saved.opacity || 100,
+    tolerance: saved.tolerance ?? 42,
     view: 'center', thumbstickEnabled: saved.thumbstickEnabled !== false,
     canUndo: false, canRedo: false,
   });
