@@ -78,9 +78,12 @@
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none;
   }
 
-  @media (max-width:560px){
-    #tools{top:auto; bottom:130px; right:8px; left:8px; width:auto; flex-direction:row; flex-wrap:wrap; align-items:center;}
+  #toolsToggle{display:none;}
+  @media (max-width:560px),(orientation:portrait){
+    #tools{top:auto; bottom:128px; right:8px; left:8px; width:auto; max-height:46vh; overflow-y:auto; flex-direction:row; flex-wrap:wrap; align-items:flex-start;}
     #tools .grp{flex:1 1 46%;}
+    #tools.tools-hidden{display:none;}
+    #toolsToggle{display:flex;}
     #status{top:54px;}
   }
 </style>
@@ -92,7 +95,8 @@
 <header>
   <div class="brand">flick<b>paint</b>3d <small>ART4QUINN</small></div>
   <div class="top-actions">
-    <a class="btn" href="../" title="Back to FlickPaint">← FlickPaint</a>
+    <a class="btn" href="../" title="Home">← Home</a>
+    <button class="btn" id="toolsToggle" title="Show / hide tools">🎛️</button>
     <button class="btn" id="shot" title="Save a picture of the scene">📷</button>
     <button class="btn" id="save" title="Save the painted skin">💾</button>
   </div>

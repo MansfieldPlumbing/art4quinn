@@ -912,7 +912,8 @@ function initEngine() {
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 1) {
       const pt = canvasPoint(e); const inside = pt.x >= 0 && pt.x <= doc('width') && pt.y >= 0 && pt.y <= doc('height');
-      if (!inside || spaceDown) { panning = true; drawing = false; dragStart = { ex: e.clientX, ey: e.clientY, tx: view.x, ty: view.y }; }
+      const wantPan = e.button === 1 || e.button === 2 || spaceDown || !inside;   // right/middle click or space = pan, not paint
+      if (wantPan) { panning = true; drawing = false; dragStart = { ex: e.clientX, ey: e.clientY, tx: view.x, ty: view.y }; }
       else { panning = false; drawing = true; const c = toolCtx(); const t = Tools[session('tool')]; if (c && t && t.onPointerDown) t.onPointerDown(pt, c); }
     } else if (pointers.size === 2) {
       drawing = false; panning = false; const p = [...pointers.values()];
@@ -926,7 +927,14 @@ function initEngine() {
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 1 && panning) { view.x = dragStart.tx + (e.clientX - dragStart.ex); view.y = dragStart.ty + (e.clientY - dragStart.ey); applyWorld(); }
-    else if (pointers.size === 1 && drawing) { const pt = canvasPoint(e); const c = toolCtx(); const t = Tools[session('tool')]; if (c && t && t.onPointerMove) t.onPointerMove(pt, c); }
+    else if (pointers.size === 1 && drawing) {
+      const c = toolCtx(); const t = Tools[session('tool')];
+      if (c && t && t.onPointerMove) {
+        const evs = (e.getCoalescedEvents && e.getCoalescedEvents()) || [];
+        if (evs.length) { for (const ce of evs) t.onPointerMove(canvasPoint(ce), c); }
+        else t.onPointerMove(canvasPoint(e), c);
+      }
+    }
     else if (pointers.size === 2 && pinch) {
       const p = [...pointers.values()]; const dx = p[1].x - p[0].x, dy = p[1].y - p[0].y; const dist = Math.hypot(dx, dy);
       const ns = Math.max(0.05, Math.min(10, pinch.scale * (dist / pinch.dist))); view.scale = ns;
@@ -947,6 +955,7 @@ function initEngine() {
     } else if (pointers.size === 1) { drawing = false; panning = false; }
   };
   vp.addEventListener('pointerup', up); vp.addEventListener('pointercancel', up); vp.addEventListener('pointerleave', up);
+  vp.addEventListener('contextmenu', (e) => e.preventDefault());   // right-drag pans; no context menu
 
   vp.addEventListener('wheel', (e) => {
     e.preventDefault(); const rect = vp.getBoundingClientRect(); const mx = e.clientX - rect.left, my = e.clientY - rect.top;
@@ -1177,6 +1186,7 @@ function buildTop() {
         <button class="gridbtn" id="f-save">${icon('save')}<span>Save</span></button>
         <button class="gridbtn" id="f-export">${icon('download')}<span>Export</span></button>
       </div>
+      <button class="gridbtn" id="f-assets" style="flex-direction:row;gap:8px;background:rgba(106,75,255,0.18);border:1px solid rgba(106,75,255,0.4)"><span style="font-size:18px">🖼️</span><span>Assets</span></button>
       <div class="row" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);border-radius:12px;padding:3px">
         <button id="r-clear" class="gridbtn" style="flex:1;flex-direction:row;gap:6px;background:transparent;border:none">${icon('trash')}<span>Clear</span></button>
         <div class="sep"></div>
@@ -1187,6 +1197,8 @@ function buildTop() {
 
   $('#deck').innerHTML = `
     <div class="pillbar">
+      <a class="iconbtn" href="../" title="Home" style="text-decoration:none;font-size:15px;display:flex;align-items:center;justify-content:center">🏠</a>
+      <div class="sep"></div>
       <button class="iconbtn" id="d-undo" title="Undo">${icon('undo')}</button>
       <button class="iconbtn" id="d-redo" title="Redo">${icon('redo')}</button>
       <div class="sep"></div>
@@ -1221,6 +1233,7 @@ function buildTop() {
   // file ops
   $('#f-new').onclick = () => { if (confirm('New project? Unsaved work is lost.')) newProject(); };
   $('#f-open').onclick = () => $('#file-input').click();
+  $('#f-assets').onclick = () => openAssets();
   $('#f-save').onclick = () => saveProject();
   $('#f-export').onclick = () => exportPNG();
   $('#r-clear').onclick = () => { if (confirm('Clear all layers?')) { pushUndo(); for (const id of getOrder()) { const c = layerCanvases.get(id); c && c.getContext('2d').clearRect(0, 0, c.width, c.height); } setView('center'); } };
@@ -1469,6 +1482,67 @@ function importFile(file, input) {
   }
   if (input) input.value = '';
 }
+
+/* ---- Assets library: pull Quinn's gallery characters in as layers ---- */
+function buildAssets() {
+  if ($('#asset-lib')) return;
+  const ov = document.createElement('div');
+  ov.id = 'asset-lib';
+  ov.style.cssText = 'display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center';
+  ov.innerHTML = `
+    <div class="mica-panel" style="width:min(720px,92vw);max-height:84vh;display:flex;flex-direction:column;border-radius:18px;overflow:hidden">
+      <div class="row" style="justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)">
+        <h2 class="title" style="margin:0">Assets</h2>
+        <button class="iconbtn" id="asset-close" style="width:30px;height:30px;font-size:20px">×</button>
+      </div>
+      <div id="asset-grid" style="padding:14px;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px"></div>
+      <div id="asset-status" class="muted" style="padding:0 16px 14px;font-size:12px"></div>
+    </div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click', (e) => { if (e.target === ov) closeAssets(); });
+  $('#asset-close').onclick = closeAssets;
+}
+function closeAssets() { const ov = $('#asset-lib'); if (ov) ov.style.display = 'none'; }
+async function openAssets() {
+  buildAssets();
+  $('#asset-lib').style.display = 'flex';
+  const grid = $('#asset-grid'), st = $('#asset-status');
+  if (grid.dataset.loaded) return;
+  st.textContent = 'Loading…';
+  try {
+    const list = await (await fetch('../gallery/manifest.json')).json();
+    const imgs = list.filter((f) => /\.(png|jpe?g|gif|webp)$/i.test(f));
+    grid.innerHTML = '';
+    imgs.forEach((f) => {
+      const b = document.createElement('button');
+      b.style.cssText = 'padding:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#1f1f29;aspect-ratio:1;cursor:pointer';
+      const im = document.createElement('img'); im.loading = 'lazy'; im.src = '../gallery/' + f; im.alt = f;
+      im.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;pointer-events:none';
+      b.appendChild(im);
+      b.onclick = () => addAsset('../gallery/' + f, f.replace(/\.[^.]+$/, ''));
+      grid.appendChild(b);
+    });
+    grid.dataset.loaded = '1';
+    st.textContent = imgs.length + ' characters — tap one to drop it in as a layer';
+  } catch (e) { st.textContent = 'Could not load the gallery library (serve over http, not file://).'; }
+}
+function addAsset(url, name) {
+  const img = new Image();
+  img.onload = () => {
+    if (getOrder().length === 0) { Sys.vom.Set(P.doc, 'width', img.width); Sys.vom.Set(P.doc, 'height', img.height); }
+    const W = doc('width'), H = doc('height');
+    const id = Date.now();
+    Sys.vom.Register(layerPath(id), 'Layer', { id, name: name || 'Asset', visible: true, locked: false, alphaLocked: false, blendMode: 'Normal', opacity: 100 });
+    setOrder([id, ...getOrder()]); Sys.vom.Set(P.doc, 'activeLayerId', id); reconcileLayers();
+    const g = layerCanvases.get(id).getContext('2d');
+    const s = Math.min(W / img.width, H / img.height, 1), w = img.width * s, h = img.height * s;
+    g.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+    pushUndo(); recenter(); setView('center'); hud('Added ' + (name || 'asset'));
+    closeAssets();
+  };
+  img.onerror = () => hud('Could not load that asset');
+  img.src = url;
+}
 function loadProject(proj) {
   Sys.vom.Unregister(P.layers); for (const id of [...layerCanvases.keys()]) { layerCanvases.get(id).remove(); layerCanvases.delete(id); }
   Sys.vom.Set(P.doc, 'width', proj.width || 1080); Sys.vom.Set(P.doc, 'height', proj.height || 1080);
@@ -1518,7 +1592,7 @@ function boot() {
   bind(P.layers, reconcileLayers);
   bind(P.doc, () => { const W = doc('width'), H = doc('height'); $('#artboard').style.width = W + 'px'; $('#artboard').style.height = H + 'px'; });
 
-  buildLeft(); buildRight(); buildTop(); buildBottom();
+  buildLeft(); buildRight(); buildTop(); buildBottom(); buildAssets();
   initEngine(); initShell(); initStick();
   paintIcons();
 

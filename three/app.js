@@ -463,6 +463,11 @@ $('ynudge').addEventListener('input', (e) => { yNudge = +e.target.value; applyY(
 $('snap').addEventListener('click', () => { yNudge = 0; $('ynudge').value = 0; applyY(); });
 $('showbox').addEventListener('click', () => { boundsOn = !boundsOn; $('showbox').classList.toggle('active', boundsOn); rebuildBounds(); });
 
+// portrait: tools panel is a collapsible bottom sheet so it doesn't cover the 3D view
+const toolsToggleBtn = $('toolsToggle');
+if (toolsToggleBtn) toolsToggleBtn.addEventListener('click', () => $('tools').classList.toggle('tools-hidden'));
+if (matchMedia('(max-width:560px),(orientation:portrait)').matches) $('tools').classList.add('tools-hidden');
+
 $('save').addEventListener('click', () => {
   if (!current) return;
   const a = document.createElement('a'); a.download = 'flickpaint3d-skin.png'; a.href = current.front.comp.toDataURL('image/png'); a.click();
