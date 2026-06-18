@@ -1,14 +1,105 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>FlickPaint</title>
-  <script>if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(rs=>{for(let r of rs)r.unregister()})}</script></head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>art4quinn</title>
+<meta name="description" content="Quinn's art studio — draw, make it 3D, and her gallery." />
+
+<!--
+  Front door for /art4quinn/ — a static hub with three workflows: Draw (2D), 3D Studio, Gallery.
+  No build step, no framework, no service worker. The script below KILLS the old PWA service
+  worker + caches that were leaving the live site black, so returning visitors get the new site.
+-->
+<script>
+  // Evict the dead "Magic Eraser" PWA: unregister its service worker + drop its caches.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(()=>{});
+  }
+  if (window.caches && caches.keys) {
+    caches.keys().then(ks => ks.forEach(k => caches.delete(k))).catch(()=>{});
+  }
+</script>
+
+<style>
+  :root{
+    --bg:#0d0d12; --text:#f3f3f8; --dim:#a6a6b4; --border:#2c2c38;
+    --green:#39ff14; --purple:#6a4bff; --pink:#ff5edb; --blue:#3bc9ff; --yellow:#ffd23b;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; min-height:100%;}
+  body{
+    background:radial-gradient(130% 90% at 50% 0%, #1d1d30 0%, #0d0d12 55%, #08080c 100%);
+    color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    min-height:100vh; display:flex; flex-direction:column; align-items:center;
+    padding:max(24px, env(safe-area-inset-top)) 18px 40px;
+  }
+  header{text-align:center; margin:18px 0 6px;}
+  h1{
+    margin:0; font-size:clamp(2.2rem, 9vw, 4rem); font-weight:900; letter-spacing:-1px;
+    background:linear-gradient(92deg, var(--green), var(--blue) 40%, var(--purple) 75%, var(--pink));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+  }
+  .tag{color:var(--dim); font-weight:700; letter-spacing:3px; font-size:.72rem; text-transform:uppercase; margin-top:6px;}
+  main{
+    width:100%; max-width:920px; margin-top:26px;
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:18px;
+  }
+  a.card{
+    text-decoration:none; color:var(--text); border-radius:22px; padding:26px 22px 22px;
+    background:#16161f; border:1px solid var(--border); position:relative; overflow:hidden;
+    display:flex; flex-direction:column; gap:8px; min-height:200px;
+    transition:transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+  }
+  a.card:hover{transform:translateY(-4px);}
+  a.card:active{transform:scale(.98);}
+  .card .emoji{font-size:3rem; line-height:1;}
+  .card h2{margin:6px 0 0; font-size:1.5rem; font-weight:800;}
+  .card p{margin:0; color:var(--dim); font-size:.92rem; line-height:1.35;}
+  .card .go{margin-top:auto; font-weight:800; font-size:.95rem; opacity:.9;}
+  .card::after{content:""; position:absolute; inset:0 0 auto 0; height:5px;}
+  .card.draw{border-color:rgba(57,255,20,.35);}    .card.draw::after{background:var(--green);}    .card.draw:hover{box-shadow:0 14px 40px -16px var(--green);}
+  .card.three{border-color:rgba(106,75,255,.4);}    .card.three::after{background:var(--purple);}  .card.three:hover{box-shadow:0 14px 40px -16px var(--purple);}
+  .card.gallery{border-color:rgba(255,94,219,.35);} .card.gallery::after{background:var(--pink);}   .card.gallery:hover{box-shadow:0 14px 40px -16px var(--pink);}
+  .card .go .arrow{display:inline-block; transition:transform .12s ease;}
+  a.card:hover .arrow{transform:translateX(4px);}
+  footer{margin-top:34px; color:var(--dim); font-size:.78rem; text-align:center;}
+  footer a{color:var(--blue); text-decoration:none;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>art4quinn</h1>
+  <div class="tag">Quinn's Art Studio</div>
+</header>
+
+<main>
+  <a class="card draw" href="paint/">
+    <div class="emoji">🎨</div>
+    <h2>Draw</h2>
+    <p>Paint on a blank canvas — brushes, layers, fill, and more. Works great on a tablet.</p>
+    <div class="go">Open <span class="arrow">→</span></div>
+  </a>
+
+  <a class="card three" href="three/">
+    <div class="emoji">🧊</div>
+    <h2>Make 3D</h2>
+    <p>Pick a character and turn it into a standee you can spin around and paint on. (Early version.)</p>
+    <div class="go">Open <span class="arrow">→</span></div>
+  </a>
+
+  <a class="card gallery" href="gallery.html">
+    <div class="emoji">🖼️</div>
+    <h2>Gallery</h2>
+    <p>Quinn's whole roster of characters and animations — the original collection.</p>
+    <div class="go">Open <span class="arrow">→</span></div>
+  </a>
+</main>
+
+<footer>
+  Made for Quinn · <a href="https://www.youtube.com/hacktheplanet" rel="noopener">youtube.com/hacktheplanet</a>
+</footer>
+
+</body>
 </html>
-
-
