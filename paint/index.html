@@ -143,6 +143,17 @@ body[data-view="left"]   .panel.left   { transform: none; }
 body[data-view="right"]  .panel.right  { transform: none; }
 body[data-view="bottom"] .panel.bottom { transform: none; }
 
+/* ===== Desktop / landscape: docked Photoshop-style layout (Tools left, Layers right, canvas between) ===== */
+@media (min-width: 900px) {
+  .panel.left, .panel.right { transform: none !important; top: 54px; bottom: 0; height: auto; max-width: none; border-radius: 0; padding: 16px 14px; }
+  .panel.left  { width: 248px; border-right: 1px solid var(--line); }
+  .panel.right { width: 290px; border-left: 1px solid var(--line); }
+  .tab.left, .tab.right { display: none; }           /* panels are docked, no edge grips */
+  #stick { display: none !important; }               /* joystick is a touch affordance */
+  #stage { transform: none !important; filter: none !important; }  /* no parallax/dim when docked */
+  #top { left: 248px; right: 290px; width: auto; max-width: none; transform: none; border-radius: 0; }
+}
+
 /* ===== Top window blind ===== */
 #top { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 100%; max-width: 448px;
   z-index: 38; border-radius: 0 0 24px 24px; border-top: 0; pointer-events: auto; }
@@ -186,6 +197,8 @@ input:focus { border-color: rgba(255,255,255,0.3); }
 .toolcell span { font-size: 9px; }
 .toolcell .ic { width: 20px; height: 20px; }
 .grid3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; }
+.toolwrap { display: flex; flex-wrap: wrap; gap: 6px; }       /* flex-wrap toolboxes (match brushes/colors) */
+.toolwrap .toolcell { width: 64px; flex: 0 0 auto; }
 
 .swatches { display: flex; flex-wrap: wrap; gap: 8px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 12px; }
 .swatch { width: 28px; height: 28px; border-radius: 999px; border: 2px solid rgba(0,0,0,0.5); transition: transform .12s; }
@@ -933,10 +946,7 @@ let pinch = null;
 
 function initEngine() {
   const vp = $('#viewport');
-  const W = doc('width'), H = doc('height');
-  const init = Math.min((innerWidth * 0.9) / W, (innerHeight * 0.8) / H);
-  view = { x: (innerWidth - W * init) / 2, y: (innerHeight - H * init) / 2, scale: init, rotate: 0 };
-  applyWorld();
+  recenter();
 
   vp.addEventListener('pointerdown', (e) => {
     const edge = 40;
@@ -1066,7 +1076,7 @@ function buildLeft() {
   const cats = Sys.registry.Resolve('\\Catalog\\Tools');
   $('#pane-tools').innerHTML = cats.map((cat) => `
     <h3 class="section" style="margin:10px 0 6px">${cat.title}</h3>
-    <div class="grid3">${cat.tools.map((t) => `
+    <div class="toolwrap">${cat.tools.map((t) => `
       <button class="toolcell" data-tool="${t.id}" title="${t.label}">${icon(t.icon)}<span>${t.label}</span></button>`).join('')}</div>`).join('');
   $('#pane-tools').querySelectorAll('[data-tool]').forEach((b) => b.onclick = () => setSession('tool', b.dataset.tool));
 
@@ -1274,7 +1284,7 @@ function buildTop() {
   $('#f-save').onclick = () => saveProject();
   $('#f-export').onclick = () => exportPNG();
   $('#r-clear').onclick = () => { if (confirm('Clear all layers?')) { pushUndo(); for (const id of getOrder()) { const c = layerCanvases.get(id); c && c.getContext('2d').clearRect(0, 0, c.width, c.height); } setView('center'); } };
-  $('#r-reset').onclick = () => { const W = doc('width'), H = doc('height'); const s = Math.min((innerWidth * 0.9) / W, (innerHeight * 0.8) / H); view = { x: (innerWidth - W * s) / 2, y: (innerHeight - H * s) / 2, scale: s, rotate: 0 }; applyWorld(); setView('center'); };
+  $('#r-reset').onclick = () => { recenter(); setView('center'); };
   $('#file-input').onchange = (e) => importFile(e.target.files[0], e.target);
 
   // deck
@@ -1642,7 +1652,14 @@ function loadProject(proj) {
   if (pending === 0) { History.clear(); pushUndo(); }
   recenter(); setView('center'); hud('Loaded project');
 }
-function recenter() { const W = doc('width'), H = doc('height'); const s = Math.min((innerWidth * 0.9) / W, (innerHeight * 0.8) / H); view = { x: (innerWidth - W * s) / 2, y: (innerHeight - H * s) / 2, scale: s, rotate: 0 }; applyWorld(); }
+function workArea() {
+  if (matchMedia('(min-width: 900px)').matches) {
+    const L = 248, R = 290, T = 54;
+    return { x: L, y: T, w: Math.max(160, innerWidth - L - R), h: Math.max(160, innerHeight - T) };
+  }
+  return { x: 0, y: 0, w: innerWidth, h: innerHeight };
+}
+function recenter() { const a = workArea(); const W = doc('width'), H = doc('height'); const s = Math.min((a.w * 0.9) / W, (a.h * 0.85) / H); view = { x: a.x + (a.w - W * s) / 2, y: a.y + (a.h - H * s) / 2, scale: s, rotate: 0 }; applyWorld(); }
 function applyResize(nw, nh) {
   if (!(nw > 0 && nh > 0)) return; const backups = getOrder().map((id) => { const cv = layerCanvases.get(id); const b = document.createElement('canvas'); b.width = cv.width; b.height = cv.height; b.getContext('2d').drawImage(cv, 0, 0); return { id, b }; });
   Sys.vom.Set(P.doc, 'width', nw); Sys.vom.Set(P.doc, 'height', nh);
