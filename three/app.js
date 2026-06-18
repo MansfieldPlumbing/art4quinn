@@ -457,16 +457,13 @@ function syncTool() {
 $('clear').addEventListener('click', () => { if (current) { current.front.clearPaint(); current.back.clearPaint(); } });
 $('reset').addEventListener('click', () => { if (current) frameModel(current.size.y * current.s); });
 
-// view presets + measuring controls
-document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+// view presets + measuring controls (data-cam, so it doesn't collide with the shell's body[data-view])
+document.querySelectorAll('[data-cam]').forEach(b => b.addEventListener('click', () => setView(b.dataset.cam)));
 $('ynudge').addEventListener('input', (e) => { yNudge = +e.target.value; applyY(); });
 $('snap').addEventListener('click', () => { yNudge = 0; $('ynudge').value = 0; applyY(); });
 $('showbox').addEventListener('click', () => { boundsOn = !boundsOn; $('showbox').classList.toggle('active', boundsOn); rebuildBounds(); });
 
-// portrait: tools panel is a collapsible bottom sheet so it doesn't cover the 3D view
-const toolsToggleBtn = $('toolsToggle');
-if (toolsToggleBtn) toolsToggleBtn.addEventListener('click', () => $('tools').classList.toggle('tools-hidden'));
-if (matchMedia('(max-width:560px),(orientation:portrait)').matches) $('tools').classList.add('tools-hidden');
+// panel show/hide is handled by the shared glass shell (body[data-view] + tabs/joystick) in index.html
 
 $('save').addEventListener('click', () => {
   if (!current) return;
