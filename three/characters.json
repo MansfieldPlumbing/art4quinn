@@ -1,0 +1,16 @@
+{
+  "_comment": "Quinn's cast for the flickpaint3d studio. First 3 pink-kitty singles removed. Verified front/back pairs (front sheet on the front face, back sheet on the back face) come first; the rest are single sheets (back mirrors the front for now). Paths are relative to public/three/ and resolve to ../gallery -> /art4quinn/gallery/ once deployed. TODO(Scott): confirm/add the remaining front/back pairings.",
+  "characters": [
+    { "id": "blue-bot",       "name": "Blue Bot",        "front": "../gallery/Q000034.png", "back": "../gallery/Q000035.png" },
+    { "id": "hero-kid",       "name": "Hero Kid",        "front": "../gallery/Q000036.png", "back": "../gallery/Q000037.png" },
+    { "id": "blue-dress",     "name": "Blue Dress Girl", "front": "../gallery/Q000046.png", "back": "../gallery/Q000047.png" },
+    { "id": "red-eyes",       "name": "Red-Eyes",        "front": "../gallery/Q000038.png" },
+    { "id": "beret-guy",      "name": "Beret Guy",       "front": "../gallery/Q000039.png" },
+    { "id": "pink-heart",     "name": "Pink Heart-Head", "front": "../gallery/Q000040.png" },
+    { "id": "red-heart",      "name": "Red Heart-Head",  "front": "../gallery/Q000041.png" },
+    { "id": "blue-bonk",      "name": "Blue Bonk",       "front": "../gallery/Q000042.jpg" },
+    { "id": "paper-bag",      "name": "Paper-Bag Head",  "front": "../gallery/Q000043.png" },
+    { "id": "midnight-kitty", "name": "Midnight Kitty",  "front": "../gallery/Q000044.png" },
+    { "id": "midnight-kitty-2","name": "Midnight Kitty 2","front": "../gallery/Q000045.png" }
+  ]
+}
