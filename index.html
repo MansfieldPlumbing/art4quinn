@@ -3,102 +3,106 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<title>art4quinn</title>
-<meta name="description" content="Quinn's art studio — draw, make it 3D, and her gallery." />
+<title>A4Q · art4quinn</title>
+<meta name="description" content="art4quinn — Quinn's studio for drawing, sculpting in 3D, and her gallery." />
 
-<!--
-  Front door for /art4quinn/ — a static hub with three workflows: Draw (2D), 3D Studio, Gallery.
-  No build step, no framework, no service worker. The script below KILLS the old PWA service
-  worker + caches that were leaving the live site black, so returning visitors get the new site.
--->
+<!-- Evict the dead "Magic Eraser" PWA service worker + caches so the new site is served. -->
 <script>
-  // Evict the dead "Magic Eraser" PWA: unregister its service worker + drop its caches.
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(()=>{});
-  }
-  if (window.caches && caches.keys) {
-    caches.keys().then(ks => ks.forEach(k => caches.delete(k))).catch(()=>{});
-  }
+  if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(()=>{});
+  if (window.caches && caches.keys) caches.keys().then(ks => ks.forEach(k => caches.delete(k))).catch(()=>{});
 </script>
 
 <style>
+  @font-face{ font-family:'Selawik'; src:url('paint/assets/fonts/selawk.ttf') format('truetype'); font-weight:100 900; font-display:swap; }
   :root{
-    --bg:#0d0d12; --text:#f3f3f8; --dim:#a6a6b4; --border:#2c2c38;
-    --green:#39ff14; --purple:#6a4bff; --pink:#ff5edb; --blue:#3bc9ff; --yellow:#ffd23b;
+    --ink:#0a0a0d; --ink2:#15151c;
+    --paper:#ece9e2; --muted:#8d8a82; --faint:#5c5a55;
+    --line:rgba(236,233,226,.12); --line2:rgba(236,233,226,.22);
+    --accent:#c2a878;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0; min-height:100%;}
   body{
-    background:radial-gradient(130% 90% at 50% 0%, #1d1d30 0%, #0d0d12 55%, #08080c 100%);
-    color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    background:
+      radial-gradient(120% 80% at 50% -10%, #1c1c24 0%, var(--ink) 60%),
+      var(--ink);
+    color:var(--paper);
+    font-family:'Selawik', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     min-height:100vh; display:flex; flex-direction:column; align-items:center;
-    padding:max(24px, env(safe-area-inset-top)) 18px 40px;
+    padding:max(40px, env(safe-area-inset-top)) 22px 48px; -webkit-font-smoothing:antialiased;
   }
-  header{text-align:center; margin:18px 0 6px;}
-  h1{
-    margin:0; font-size:clamp(2.2rem, 9vw, 4rem); font-weight:900; letter-spacing:-1px;
-    background:linear-gradient(92deg, var(--green), var(--blue) 40%, var(--purple) 75%, var(--pink));
-    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent;
+
+  /* ---- Hero: the A4Q monogram + art4quinn wordmark ---- */
+  header{ text-align:center; margin:clamp(20px,7vh,72px) 0 0; }
+  .monogram{
+    font-weight:200; font-size:clamp(4.2rem, 17vw, 9rem); line-height:.9;
+    letter-spacing:.06em; color:var(--paper); position:relative; display:inline-block;
   }
-  .tag{color:var(--dim); font-weight:700; letter-spacing:3px; font-size:.72rem; text-transform:uppercase; margin-top:6px;}
-  main{
-    width:100%; max-width:920px; margin-top:26px;
-    display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:18px;
-  }
+  .monogram .four{ color:var(--accent); font-weight:300; }
+  .rule{ width:64px; height:1px; background:var(--accent); margin:22px auto 18px; opacity:.85; }
+  .wordmark{ font-size:.74rem; letter-spacing:.42em; text-transform:uppercase; color:var(--muted); margin-left:.42em; }
+  .tagline{ margin-top:14px; color:var(--faint); font-size:.92rem; letter-spacing:.02em; }
+
+  /* ---- Cards: editorial, restrained ---- */
+  main{ width:100%; max-width:860px; margin-top:clamp(34px,7vh,64px);
+    display:grid; grid-template-columns:repeat(auto-fit, minmax(230px,1fr)); gap:1px;
+    background:var(--line); border:1px solid var(--line); border-radius:4px; overflow:hidden; }
   a.card{
-    text-decoration:none; color:var(--text); border-radius:22px; padding:26px 22px 22px;
-    background:#16161f; border:1px solid var(--border); position:relative; overflow:hidden;
-    display:flex; flex-direction:column; gap:8px; min-height:200px;
-    transition:transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+    text-decoration:none; color:var(--paper); background:var(--ink);
+    padding:30px 26px 26px; min-height:188px; position:relative;
+    display:flex; flex-direction:column; transition:background .25s ease;
   }
-  a.card:hover{transform:translateY(-4px);}
-  a.card:active{transform:scale(.98);}
-  .card .emoji{font-size:3rem; line-height:1;}
-  .card h2{margin:6px 0 0; font-size:1.5rem; font-weight:800;}
-  .card p{margin:0; color:var(--dim); font-size:.92rem; line-height:1.35;}
-  .card .go{margin-top:auto; font-weight:800; font-size:.95rem; opacity:.9;}
-  .card::after{content:""; position:absolute; inset:0 0 auto 0; height:5px;}
-  .card.draw{border-color:rgba(57,255,20,.35);}    .card.draw::after{background:var(--green);}    .card.draw:hover{box-shadow:0 14px 40px -16px var(--green);}
-  .card.three{border-color:rgba(106,75,255,.4);}    .card.three::after{background:var(--purple);}  .card.three:hover{box-shadow:0 14px 40px -16px var(--purple);}
-  .card.gallery{border-color:rgba(255,94,219,.35);} .card.gallery::after{background:var(--pink);}   .card.gallery:hover{box-shadow:0 14px 40px -16px var(--pink);}
-  .card .go .arrow{display:inline-block; transition:transform .12s ease;}
-  a.card:hover .arrow{transform:translateX(4px);}
-  footer{margin-top:34px; color:var(--dim); font-size:.78rem; text-align:center;}
-  footer a{color:var(--blue); text-decoration:none;}
+  a.card:hover{ background:var(--ink2); }
+  .num{ font-size:.72rem; letter-spacing:.3em; color:var(--accent); font-feature-settings:'tnum'; }
+  .card h2{ margin:14px 0 8px; font-size:1.5rem; font-weight:500; letter-spacing:.01em; }
+  .card p{ margin:0; color:var(--muted); font-size:.92rem; line-height:1.5; }
+  .card .go{ margin-top:auto; padding-top:18px; display:flex; align-items:center; gap:8px;
+    color:var(--faint); font-size:.82rem; letter-spacing:.12em; text-transform:uppercase; transition:color .25s ease; }
+  a.card:hover .go{ color:var(--paper); }
+  .card .go .arrow{ transition:transform .25s ease; }
+  a.card:hover .go .arrow{ transform:translateX(5px); color:var(--accent); }
+  .card::before{ content:''; position:absolute; left:0; top:0; height:2px; width:0; background:var(--accent); transition:width .3s ease; }
+  a.card:hover::before{ width:100%; }
+
+  footer{ margin-top:auto; padding-top:42px; color:var(--faint); font-size:.76rem; letter-spacing:.04em; text-align:center; }
+  footer a{ color:var(--muted); text-decoration:none; border-bottom:1px solid var(--line2); padding-bottom:1px; }
+  footer a:hover{ color:var(--paper); }
 </style>
 </head>
 <body>
 
 <header>
-  <h1>art4quinn</h1>
-  <div class="tag">Quinn's Art Studio</div>
+  <div class="monogram">A<span class="four">4</span>Q</div>
+  <div class="rule"></div>
+  <div class="wordmark">art4quinn</div>
+  <div class="tagline">Quinn's studio — draw it, make it real, keep it.</div>
 </header>
 
 <main>
-  <a class="card draw" href="paint/">
-    <div class="emoji">🎨</div>
+  <a class="card" href="paint/">
+    <div class="num">01</div>
     <h2>Draw</h2>
-    <p>Paint on a blank canvas — brushes, layers, fill, and more. Works great on a tablet.</p>
+    <p>A clean canvas — brushes, layers, fill and her whole character library to paint from.</p>
     <div class="go">Open <span class="arrow">→</span></div>
   </a>
 
-  <a class="card three" href="three/">
-    <div class="emoji">🧊</div>
-    <h2>Make 3D</h2>
-    <p>Pick a character and turn it into a standee you can spin around and paint on. (Early version.)</p>
+  <a class="card" href="three/">
+    <div class="num">02</div>
+    <h2>Studio</h2>
+    <p>Turn a character into a 3D standee you can spin around and paint on.</p>
     <div class="go">Open <span class="arrow">→</span></div>
   </a>
 
-  <a class="card gallery" href="gallery.html">
-    <div class="emoji">🖼️</div>
+  <a class="card" href="gallery.html">
+    <div class="num">03</div>
     <h2>Gallery</h2>
-    <p>Quinn's whole roster of characters and animations — the original collection.</p>
+    <p>The full collection — every character and animation, all in one place.</p>
     <div class="go">Open <span class="arrow">→</span></div>
   </a>
 </main>
 
 <footer>
-  Made for Quinn · <a href="https://www.youtube.com/hacktheplanet" rel="noopener">youtube.com/hacktheplanet</a>
+  art4quinn · made for Quinn · <a href="https://www.youtube.com/hacktheplanet" rel="noopener">youtube.com/hacktheplanet</a>
 </footer>
 
 </body>

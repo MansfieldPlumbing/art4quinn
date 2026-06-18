@@ -93,18 +93,18 @@ h2, h3 { margin: 0; }
   position: absolute; top: -25000px; left: -25000px; width: 50000px; height: 50000px;
   pointer-events: none;
   background-image:
-    linear-gradient(45deg,#121214 25%,transparent 25%,transparent 75%,#121214 75%,#121214),
-    linear-gradient(45deg,#121214 25%,transparent 25%,transparent 75%,#121214 75%,#121214);
-  background-size: 32px 32px; background-position: 0 0, 16px 16px;
+    linear-gradient(45deg,#1d1d27 25%,transparent 25%,transparent 75%,#1d1d27 75%,#1d1d27),
+    linear-gradient(45deg,#1d1d27 25%,transparent 25%,transparent 75%,#1d1d27 75%,#1d1d27);
+  background-size: 36px 36px; background-position: 0 0, 18px 18px;
 }
 #artboard {
   position: absolute; top: 0; left: 0; background:#fff;
   box-shadow: 0 0 100px rgba(0,0,0,0.5), 0 0 40px rgba(0,0,0,0.3);
   outline: 1px solid rgba(255,255,255,0.2);
   background-image:
-    linear-gradient(45deg,#e5e5e5 25%,transparent 25%,transparent 75%,#e5e5e5 75%,#e5e5e5),
-    linear-gradient(45deg,#e5e5e5 25%,transparent 25%,transparent 75%,#e5e5e5 75%,#e5e5e5);
-  background-size: 20px 20px; background-position: 0 0, 10px 10px;
+    linear-gradient(45deg,#bdc0c8 25%,transparent 25%,transparent 75%,#bdc0c8 75%,#bdc0c8),
+    linear-gradient(45deg,#bdc0c8 25%,transparent 25%,transparent 75%,#bdc0c8 75%,#bdc0c8);
+  background-size: 22px 22px; background-position: 0 0, 11px 11px;
 }
 #artboard canvas { position: absolute; inset: 0; pointer-events: none; }
 
@@ -395,6 +395,7 @@ function createEmbeddedRegistry(seed) {
 const CATALOG = {
   '\\Catalog\\Tools': [
     { title: 'Select', tools: [
+      { id: 'hand', icon: 'hand', label: 'Pan' },
       { id: 'move', icon: 'move', label: 'Move' },
       { id: 'select', icon: 'select', label: 'Select' },
       { id: 'lasso', icon: 'lasso', label: 'Lasso' },
@@ -481,6 +482,7 @@ function bind(path, render) { render(); return Sys.vom.Wait(path, render); }
 const SVG = (inner) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
 const ICONS = {
   move: SVG('<path d="M5 9 2 12l3 3"/><path d="m9 5 3-3 3 3"/><path d="m15 19-3 3-3-3"/><path d="m19 9 3 3-3 3"/><path d="M2 12h20"/><path d="M12 2v20"/>'),
+  hand: SVG('<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>'),
   select: SVG('<rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="4 3"/>'),
   lasso: SVG('<circle cx="6" cy="6" r="3"/><path d="M8.5 8.5 20 20"/><path d="M20 20l-3 .5.5-3"/>'),
   wand: SVG('<path d="m3 21 12-12"/><path d="M15 4v4M13 6h4M18 13v3M16.5 14.5h3"/><path d="m14 7 3 3"/>'),
@@ -615,6 +617,9 @@ reg({ id: 'eraser', name: 'Eraser', type: 'paint', cursor: 'crosshair',
   onPointerDown(pt, c) { c.pushUndoState(); _last = { x: pt.x, y: pt.y }; this._cfg(c.ctx, c); c.ctx.beginPath(); c.ctx.moveTo(pt.x, pt.y); c.ctx.lineTo(pt.x, pt.y); c.ctx.lineWidth = c.size * (pt.pressure || 1); c.ctx.stroke(); },
   onPointerMove(pt, c) { this._cfg(c.ctx, c); c.ctx.beginPath(); c.ctx.moveTo(_last.x, _last.y); c.ctx.lineTo(pt.x, pt.y); c.ctx.lineWidth = c.size * (pt.pressure || 1); c.ctx.stroke(); _last = { x: pt.x, y: pt.y }; },
   onPointerUp(pt, c) { c.ctx.globalCompositeOperation = 'source-over'; } });
+
+/* Pan / Hand — a no-op paint tool; the engine pans the view while it's active (drag = move around). */
+reg({ id: 'hand', name: 'Pan', type: 'system', cursor: 'grab', onPointerDown() {}, onPointerMove() {}, onPointerUp() {} });
 
 reg({ id: 'fill', name: 'Fill', type: 'paint', cursor: 'crosshair',
   onPointerDown(pt, c) {
@@ -938,7 +943,7 @@ function initEngine() {
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 1) {
       const pt = canvasPoint(e); const inside = pt.x >= 0 && pt.x <= doc('width') && pt.y >= 0 && pt.y <= doc('height');
-      const wantPan = e.button === 1 || e.button === 2 || spaceDown || !inside;   // right/middle click or space = pan, not paint
+      const wantPan = session('tool') === 'hand' || e.button === 1 || e.button === 2 || spaceDown || !inside;   // Pan tool, right/middle click, or space = drag to pan
       if (wantPan) { panning = true; drawing = false; dragStart = { ex: e.clientX, ey: e.clientY, tx: view.x, ty: view.y }; }
       else { panning = false; drawing = true; const c = toolCtx(); const t = Tools[session('tool')]; if (c && t && t.onPointerDown) t.onPointerDown(pt, c); }
     } else if (pointers.size === 2) {
@@ -1261,7 +1266,7 @@ function buildTop() {
     </div>`;
 
   // file ops
-  $('#f-new').onclick = () => { if (confirm('New project? Unsaved work is lost.')) newProject(); };
+  $('#f-new').onclick = () => openNewDialog();
   $('#f-open').onclick = () => $('#file-input').click();
   $('#f-assets').onclick = () => openAssets();
   $('#f-save').onclick = () => saveProject();
@@ -1476,15 +1481,53 @@ function initShell() {
 /* ============================================================================
  *  FILE — new / import / export PNG / save+load project (JSON, no deps)
  * ========================================================================== */
-function newProject() {
+function newProject(w = 1080, h = 1080) {
   for (const id of [...layerCanvases.keys()]) { layerCanvases.get(id).remove(); layerCanvases.delete(id); }
   Sys.vom.Unregister(P.layers);
-  Sys.vom.Register(P.doc, 'Document', { width: 1080, height: 1080, activeLayerId: 1, selection: null });
+  Sys.vom.Register(P.doc, 'Document', { width: w, height: h, activeLayerId: 1, selection: null });
   seedLayers([{ id: 1, name: 'Painting Layer' }, { id: 2, name: 'Background' }]);
   reconcileLayers(); History.clear(); pushUndo();
   const W = doc('width'), H = doc('height'); const s = Math.min((innerWidth * 0.9) / W, (innerHeight * 0.8) / H);
   view = { x: (innerWidth - W * s) / 2, y: (innerHeight - H * s) / 2, scale: s, rotate: 0 }; applyWorld(); setView('center');
 }
+
+/* New-canvas dialog: ask dimensions (with presets) before starting a fresh document. */
+function buildNewDialog() {
+  if ($('#new-dialog')) return;
+  const inp = 'width:100%;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,.4);border:1px solid var(--line);color:#fff;font-family:inherit;font-size:14px';
+  const ov = document.createElement('div');
+  ov.id = 'new-dialog';
+  ov.style.cssText = 'display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center';
+  ov.innerHTML = `
+    <div class="mica-panel" style="width:min(360px,92vw);border-radius:18px;padding:20px;display:flex;flex-direction:column;gap:16px">
+      <h2 class="title" style="margin:0">New Canvas</h2>
+      <div class="row" style="gap:10px">
+        <div style="flex:1"><label class="field-label">Width</label><input type="number" id="new-w" value="1080" min="1" max="8192" style="${inp}"></div>
+        <div style="flex:1"><label class="field-label">Height</label><input type="number" id="new-h" value="1080" min="1" max="8192" style="${inp}"></div>
+      </div>
+      <div class="row" id="new-presets" style="gap:6px;flex-wrap:wrap">
+        <button class="minibtn" data-w="1080" data-h="1080">1080²</button>
+        <button class="minibtn" data-w="1920" data-h="1080">1920×1080</button>
+        <button class="minibtn" data-w="1080" data-h="1920">1080×1920</button>
+        <button class="minibtn" data-w="2048" data-h="2048">2048²</button>
+      </div>
+      <div class="row" style="gap:8px;justify-content:flex-end;align-items:center">
+        <span class="muted" style="margin-right:auto;font-size:11px">Starts a fresh document.</span>
+        <button class="minibtn" id="new-cancel" style="padding:8px 14px">Cancel</button>
+        <button class="btn-primary" id="new-create" style="width:auto;padding:8px 18px">Create</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.style.display = 'none'; });
+  ov.querySelectorAll('#new-presets [data-w]').forEach((b) => b.onclick = () => { $('#new-w').value = b.dataset.w; $('#new-h').value = b.dataset.h; });
+  $('#new-cancel').onclick = () => { ov.style.display = 'none'; };
+  $('#new-create').onclick = () => {
+    const w = Math.max(1, Math.min(8192, parseInt($('#new-w').value, 10) || 1080));
+    const h = Math.max(1, Math.min(8192, parseInt($('#new-h').value, 10) || 1080));
+    ov.style.display = 'none'; newProject(w, h); hud(`New ${w}×${h} canvas`);
+  };
+}
+function openNewDialog() { buildNewDialog(); $('#new-dialog').style.display = 'flex'; $('#new-w').focus(); }
 function seedLayers(defs) {
   defs.forEach((d) => Sys.vom.Register(layerPath(d.id), 'Layer', { id: d.id, name: d.name, visible: true, locked: false, alphaLocked: false, blendMode: 'Normal', opacity: 100 }));
   setOrder(defs.map((d) => d.id)); Sys.vom.Set(P.doc, 'activeLayerId', defs[0].id);
