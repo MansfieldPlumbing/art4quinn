@@ -520,6 +520,26 @@ reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
   },
   onPointerMove() {}, onPointerUp() {} });
 
+// AI Magic Wand — tap an object to select it (SlimSAM). Produces a pixel-mask selection.
+reg({ id: 'aiwand', name: 'AI Wand', type: 'select', cursor: 'crosshair',
+  async onPointerDown(pt, c) {
+    if (aiBusy) return; aiNoticeOnce(); aiBusy = true; hud('Loading magic wand…');
+    try {
+      const { selectAt } = await import('../assets/ml/select.js');
+      const key = doc('activeLayerId') + ':' + c.canvas.width + 'x' + c.canvas.height;
+      const { mask, bounds, any } = await selectAt(c.canvas, pt.x, pt.y, key, (s) => hud(s));
+      if (!any) { hud('No object found there — aim for its centre'); return; }
+      if (c.overlayCtx) {
+        c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
+        c.overlayCtx.save(); c.overlayCtx.globalAlpha = 0.45; c.overlayCtx.drawImage(tintMask(mask), 0, 0); c.overlayCtx.restore();
+      }
+      setSelection({ type: 'aimask', bounds, mask });
+      hud('Selected ✨ — Magic Eraser to remove, or Cut/Copy');
+    } catch (e) { console.error(e); hud('Wand failed — ' + (e.message || e)); }
+    finally { aiBusy = false; }
+  },
+  onPointerMove() {}, onPointerUp() {} });
+
 (() => {
   let startPt = null, cropRect = null;
   reg({ id: 'crop', name: 'Crop', type: 'select', cursor: 'crosshair',
@@ -839,8 +859,18 @@ function buildLeft() {
   $('#pane-tools').innerHTML = cats.map((cat) => `
     <h3 class="section" style="margin:10px 0 6px">${cat.title}</h3>
     <div class="toolwrap">${cat.tools.map((t) => `
-      <button class="toolcell" data-tool="${t.id}" title="${t.label}">${icon(t.icon)}<span>${t.label}</span></button>`).join('')}</div>`).join('');
+      <button class="toolcell" data-tool="${t.id}" title="${t.label}">${icon(t.icon)}<span>${t.label}</span></button>`).join('')}</div>`).join('') + `
+    <h3 class="section" style="margin:14px 0 6px">AI</h3>
+    <div class="toolwrap">
+      <button class="toolcell" data-tool="aiwand" title="AI Magic Wand — tap an object to select it"><span style="font-size:18px">🪄</span><span>Wand</span></button>
+      <button class="toolcell" id="ai-erase" title="Magic Eraser — remove the selection and fill it in"><span style="font-size:18px">🩹</span><span>Eraser</span></button>
+      <button class="toolcell" id="ai-bg" title="Erase Background — cut the subject out"><span style="font-size:18px">✂️</span><span>Cut BG</span></button>
+    </div>
+    <button id="ai-about" class="muted" style="display:flex;align-items:center;gap:6px;margin:8px 2px 0;font-size:10px;background:none;text-align:left;width:100%"><span>ℹ️</span><span>How the AI tools work</span></button>`;
   $('#pane-tools').querySelectorAll('[data-tool]').forEach((b) => b.onclick = () => setSession('tool', b.dataset.tool));
+  $('#ai-erase').onclick = () => aiMagicErase();
+  $('#ai-bg').onclick = () => aiEraseBg();
+  $('#ai-about').onclick = () => showAiAbout();
 
   // Brushes
   const brushes = Sys.registry.Resolve('\\Catalog\\Brushes');
@@ -996,7 +1026,6 @@ function buildTop() {
         <button class="gridbtn" id="f-export">${icon('download')}<span>Export</span></button>
       </div>
       <button class="gridbtn" id="f-assets" style="flex-direction:row;gap:8px;background:rgba(41,84,212,0.18);border:1px solid rgba(41,84,212,0.4)"><span style="font-size:18px">🖼️</span><span>Assets</span></button>
-      <button class="gridbtn" id="f-erasebg" style="flex-direction:row;gap:8px;background:rgba(91,139,245,0.16);border:1px solid rgba(91,139,245,0.4)"><span style="font-size:18px">✨</span><span>Erase Background</span></button>
       <div class="row" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);border-radius:12px;padding:3px">
         <button id="r-clear" class="gridbtn" style="flex:1;flex-direction:row;gap:6px;background:transparent;border:none">${icon('trash')}<span>Clear</span></button>
         <div class="sep"></div>
@@ -1044,7 +1073,6 @@ function buildTop() {
   $('#f-new').onclick = () => openNewDialog();
   $('#f-open').onclick = () => $('#file-input').click();
   $('#f-assets').onclick = () => openAssets();
-  $('#f-erasebg').onclick = () => aiEraseBg();
   $('#f-save').onclick = () => saveProject();
   $('#f-export').onclick = () => exportPNG();
   $('#r-clear').onclick = () => { if (confirm('Clear all layers?')) { pushUndo(); for (const id of getOrder()) { const c = layerCanvases.get(id); c && c.getContext('2d').clearRect(0, 0, c.width, c.height); } setView('center'); } };
@@ -1428,6 +1456,7 @@ async function aiEraseBg() {
   const probe = pc.getContext('2d').getImageData(0, 0, pw, ph).data;
   let hasPixels = false; for (let i = 3; i < probe.length; i += 4) { if (probe[i] > 8) { hasPixels = true; break; } }
   if (!hasPixels) { hud('Active layer is empty — pick the image layer'); return; }
+  aiNoticeOnce();
   aiBusy = true; setView('center'); hud('Loading AI…');
   try {
     const { removeBackground } = await import('../assets/ml/segment.js');
@@ -1439,6 +1468,76 @@ async function aiEraseBg() {
     hud('Background erased ✨');
   } catch (e) { console.error(e); hud('AI erase failed — ' + (e.message || e)); }
   finally { aiBusy = false; }
+}
+
+/* ---- AI Magic Wand selection -> mask, and Magic Eraser (LaMa inpaint) ---- */
+function tintMask(maskCanvas, rgb) {
+  const t = document.createElement('canvas'); t.width = maskCanvas.width; t.height = maskCanvas.height;
+  const g = t.getContext('2d'); g.drawImage(maskCanvas, 0, 0);
+  g.globalCompositeOperation = 'source-in'; g.fillStyle = 'rgb(' + (rgb || '59,130,246') + ')'; g.fillRect(0, 0, t.width, t.height);
+  return t;
+}
+function selectionToMask(sel, W, H) {
+  if (!sel) return null;
+  if (sel.mask) return sel.mask;                         // AI wand provides a pixel mask
+  const m = document.createElement('canvas'); m.width = W; m.height = H; const g = m.getContext('2d'); g.fillStyle = '#fff';
+  if (sel.type === 'lasso' && sel.points && sel.points.length > 2) {
+    g.beginPath(); g.moveTo(sel.points[0].x, sel.points[0].y); for (let i = 1; i < sel.points.length; i++) g.lineTo(sel.points[i].x, sel.points[i].y); g.closePath(); g.fill();
+  } else if (sel.bounds) { g.fillRect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h); }
+  else return null;
+  return m;
+}
+async function aiMagicErase() {
+  if (aiBusy) return;
+  const aid = doc('activeLayerId'); const cv = layerCanvases.get(aid);
+  if (!cv) { hud('No active layer'); return; }
+  if (getLayer(aid)?.locked) { hud('Layer is locked'); return; }
+  const mask = selectionToMask(doc('selection'), cv.width, cv.height);
+  if (!mask) { hud('Select what to erase first (AI Wand or Lasso)'); return; }
+  aiNoticeOnce();
+  aiBusy = true; setView('center'); hud('Loading magic eraser…');
+  try {
+    const { inpaint } = await import('../assets/ml/inpaint.js');
+    const patched = await inpaint(cv, mask, (s) => hud(s));
+    pushUndo();
+    const g = cv.getContext('2d'); g.clearRect(0, 0, cv.width, cv.height); g.drawImage(patched, 0, 0);
+    setSelection(null);
+    overlayCanvas.getContext('2d').clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    reconcileLayers(); hud('Erased ✨');
+  } catch (e) { console.error(e); hud('Magic eraser failed — ' + (e.message || e)); }
+  finally { aiBusy = false; }
+}
+function showAiAbout() {
+  let ov = $('#ai-about-modal');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'ai-about-modal';
+    ov.style.cssText = 'display:none;position:fixed;inset:0;z-index:320;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:20px';
+    ov.innerHTML = `
+      <div class="mica-panel" style="width:min(420px,94vw);max-height:86vh;overflow:auto;border-radius:18px;padding:18px">
+        <div class="row" style="justify-content:space-between;margin-bottom:10px">
+          <h2 class="title" style="margin:0">✨ About the AI tools</h2>
+          <button class="iconbtn" id="ai-about-x" style="width:30px;height:30px;font-size:20px">×</button>
+        </div>
+        <div style="font-size:12px;line-height:1.6;color:rgba(255,255,255,0.82);display:flex;flex-direction:column;gap:10px">
+          <p style="margin:0"><b>🪄 Wand</b> — tap an object to select it. <b>🩹 Eraser</b> — removes the selection and fills it back in. <b>✂️ Cut BG</b> — erases the background.</p>
+          <p style="margin:0"><b>Private &amp; on your device.</b> Your pictures never leave this device — the AI runs right here in the browser, nothing is uploaded.</p>
+          <p style="margin:0"><b>First use downloads a model</b> (one time, then it's saved for next time). The Eraser model is large (~200&nbsp;MB) — use Wi‑Fi the first time.</p>
+          <p style="margin:0"><b>It's experimental.</b> Results can vary or surprise you — tap <b>Undo</b> (↶) to take anything back. Works best in a recent Chrome with graphics acceleration on.</p>
+          <p style="margin:0">Big phone photos are scaled down automatically so they don't run your device out of memory.</p>
+        </div>
+        <button class="btn-primary" id="ai-about-ok" style="margin-top:14px">Got it</button>
+      </div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener('click', (e) => { if (e.target === ov) ov.style.display = 'none'; });
+    $('#ai-about-x').onclick = () => { ov.style.display = 'none'; };
+    $('#ai-about-ok').onclick = () => { ov.style.display = 'none'; };
+  }
+  ov.style.display = 'flex';
+}
+function aiNoticeOnce() {
+  try { if (localStorage.getItem('a4q-ai-notice')) return; localStorage.setItem('a4q-ai-notice', '1'); } catch (_) {}
+  showAiAbout();
 }
 function loadProject(proj) {
   Sys.vom.Unregister(P.layers); for (const id of [...layerCanvases.keys()]) { layerCanvases.get(id).remove(); layerCanvases.delete(id); }
