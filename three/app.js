@@ -208,16 +208,31 @@ function buildGeometry(mask) {
   }
   const occAt = (gx, gy) => (gx < 0 || gy < 0 || gx >= gw || gy >= gh) ? 0 : occ[gy * gw + gx];
 
-  const pos = [], uv = [], nor = [];
+  const pos = [], uv = [], nor = [], col = [];
   const d = REL_DEPTH;
   const X = (gx) => gx / gw * aspect;
   const Y = (gy) => 1 - gy / gh;
   const U = (gx) => gx / gw;
   const V = (gy) => 1 - gy / gh;
-  const quad = (a, b, c2, e, n, uvs) => {
+  const WHITE = [1, 1, 1];
+  const quad = (a, b, c2, e, n, uvs, c) => {
+    c = c || WHITE;
     for (const [vx, t] of [[a, 0], [b, 1], [c2, 2], [a, 0], [c2, 2], [e, 3]]) {
-      pos.push(vx[0], vx[1], vx[2]); nor.push(n[0], n[1], n[2]); uv.push(uvs[t][0], uvs[t][1]);
+      pos.push(vx[0], vx[1], vx[2]); nor.push(n[0], n[1], n[2]); uv.push(uvs[t][0], uvs[t][1]); col.push(c[0], c[1], c[2]);
     }
+  };
+
+  // Seam fill: tint the side walls with the silhouette's own edge colour (slightly
+  // shaded) so the rim reads as the character's edge instead of a hard black seam.
+  const bctx = mask.base.getContext('2d', { willReadFrequently: true });
+  const bw = mask.base.width, bh = mask.base.height;
+  const bdata = bctx.getImageData(0, 0, bw, bh).data;
+  const RIM = 0.82;
+  const rimColor = (gx, gy) => {
+    const sx = Math.min(bw - 1, Math.floor((gx + 0.5) / gw * bw));
+    const sy = Math.min(bh - 1, Math.floor((gy + 0.5) / gh * bh));
+    const i = (sy * bw + sx) * 4;
+    return [bdata[i] / 255 * RIM, bdata[i + 1] / 255 * RIM, bdata[i + 2] / 255 * RIM];
   };
 
   // group 0 — FRONT faces
@@ -245,10 +260,11 @@ function buildGeometry(mask) {
     if (!occ[gy * gw + gx]) continue;
     const x0 = X(gx), x1 = X(gx + 1), y0 = Y(gy + 1), y1 = Y(gy);
     const uv0 = [[0, 0], [0, 0], [0, 0], [0, 0]];
-    if (!occAt(gx - 1, gy)) quad([x0, y0, -d], [x0, y1, -d], [x0, y1, d], [x0, y0, d], [-1, 0, 0], uv0);
-    if (!occAt(gx + 1, gy)) quad([x1, y0, d], [x1, y1, d], [x1, y1, -d], [x1, y0, -d], [1, 0, 0], uv0);
-    if (!occAt(gx, gy - 1)) quad([x0, y1, d], [x1, y1, d], [x1, y1, -d], [x0, y1, -d], [0, 1, 0], uv0);
-    if (!occAt(gx, gy + 1)) quad([x0, y0, -d], [x1, y0, -d], [x1, y0, d], [x0, y0, d], [0, -1, 0], uv0);
+    const rc = rimColor(gx, gy);
+    if (!occAt(gx - 1, gy)) quad([x0, y0, -d], [x0, y1, -d], [x0, y1, d], [x0, y0, d], [-1, 0, 0], uv0, rc);
+    if (!occAt(gx + 1, gy)) quad([x1, y0, d], [x1, y1, d], [x1, y1, -d], [x1, y0, -d], [1, 0, 0], uv0, rc);
+    if (!occAt(gx, gy - 1)) quad([x0, y1, d], [x1, y1, d], [x1, y1, -d], [x0, y1, -d], [0, 1, 0], uv0, rc);
+    if (!occAt(gx, gy + 1)) quad([x0, y0, -d], [x1, y0, -d], [x1, y0, d], [x0, y0, d], [0, -1, 0], uv0, rc);
   }
   const wallCount = pos.length / 3 - frontCount - backCount;
 
@@ -256,6 +272,7 @@ function buildGeometry(mask) {
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   geo.addGroup(0, frontCount, 0);
   geo.addGroup(frontCount, backCount, 1);
   geo.addGroup(frontCount + backCount, wallCount, 2);
@@ -336,7 +353,7 @@ async function loadCharacter(ch) {
 
     const frontMat = new THREE.MeshBasicMaterial({ map: frontSkin.tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
     const backMat  = new THREE.MeshBasicMaterial({ map: backSkin.tex,  transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
-    const edgeMat  = new THREE.MeshBasicMaterial({ color: 0x15151c, side: THREE.DoubleSide });
+    const edgeMat  = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });   // seam tinted from the art
     const mesh = new THREE.Mesh(geo, [frontMat, backMat, edgeMat]);
 
     const bb = geo.boundingBox, size = new THREE.Vector3(); bb.getSize(size);
