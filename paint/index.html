@@ -529,10 +529,7 @@ reg({ id: 'aiwand', name: 'AI Wand', type: 'select', cursor: 'crosshair',
       const key = doc('activeLayerId') + ':' + c.canvas.width + 'x' + c.canvas.height;
       const { mask, bounds, any } = await selectAt(c.canvas, pt.x, pt.y, key, (s) => hud(s));
       if (!any) { hud('No object found there — aim for its centre'); return; }
-      if (c.overlayCtx) {
-        c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
-        c.overlayCtx.save(); c.overlayCtx.globalAlpha = 0.45; c.overlayCtx.drawImage(tintMask(mask), 0, 0); c.overlayCtx.restore();
-      }
+      if (c.overlayCtx) drawNeonSelection(c.overlayCtx, mask);
       setSelection({ type: 'aimask', bounds, mask });
       hud('Selected ✨ — Magic Eraser to remove, or Cut/Copy');
     } catch (e) { console.error(e); hud('Wand failed — ' + (e.message || e)); }
@@ -1476,6 +1473,28 @@ function tintMask(maskCanvas, rgb) {
   const g = t.getContext('2d'); g.drawImage(maskCanvas, 0, 0);
   g.globalCompositeOperation = 'source-in'; g.fillStyle = 'rgb(' + (rgb || '59,130,246') + ')'; g.fillRect(0, 0, t.width, t.height);
   return t;
+}
+// a white "ring" along the mask edge (dilate − original), for the neon glow
+function maskRing(maskCanvas, r) {
+  const c = document.createElement('canvas'); c.width = maskCanvas.width; c.height = maskCanvas.height;
+  const g = c.getContext('2d');
+  g.filter = `blur(${r}px)`; g.drawImage(maskCanvas, 0, 0); g.filter = 'none';   // grown
+  g.globalCompositeOperation = 'destination-out'; g.drawImage(maskCanvas, 0, 0);  // punch original -> ring
+  g.globalCompositeOperation = 'source-in'; g.fillStyle = '#eaf6ff'; g.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+// the "magic" neon-white segmentation highlight (soft fill + glowing edge)
+function drawNeonSelection(octx, maskCanvas) {
+  const W = octx.canvas.width, H = octx.canvas.height;
+  octx.clearRect(0, 0, W, H);
+  octx.save();
+  octx.globalAlpha = 0.16; octx.drawImage(tintMask(maskCanvas, '180,222,255'), 0, 0);   // faint inner fill
+  octx.restore();
+  const ring = maskRing(maskCanvas, 3);
+  octx.save();
+  octx.shadowColor = 'rgba(150,210,255,0.95)'; octx.shadowBlur = 14; octx.globalAlpha = 0.95;
+  octx.drawImage(ring, 0, 0); octx.drawImage(ring, 0, 0);                                 // double pass = stronger glow
+  octx.restore();
 }
 function selectionToMask(sel, W, H) {
   if (!sel) return null;

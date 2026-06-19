@@ -63,10 +63,20 @@ async function ensure(onStatus) {
     onStatus && onStatus('loading magic eraser…');
     const ort = await import(/* @vite-ignore */ ORT);
     ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
+    ort.env.wasm.simd = true;
     const providers = (!_forceWasm && typeof navigator !== 'undefined' && navigator.gpu) ? ['webgpu', 'wasm'] : ['wasm'];
     const buf = await fetchWithProgress(MODEL_URL, onStatus);   // cached by the browser HTTP cache
     onStatus && onStatus('warming up eraser…');
-    const session = await ort.InferenceSession.create(buf, { executionProviders: providers });
+    const opts = { executionProviders: providers };
+    let session;
+    try {
+      ort.env.wasm.proxy = true;                                // run inference in a Worker -> no UI hang
+      session = await ort.InferenceSession.create(buf, opts);
+    } catch (e) {                                               // some builds can't proxy -> fall back to main thread
+      ort.env.wasm.proxy = false;
+      const buf2 = await fetchWithProgress(MODEL_URL);          // served from cache, fast
+      session = await ort.InferenceSession.create(buf2, opts);
+    }
     return { ort, session };
   })().catch((e) => { _ready = null; throw e; });
   return _ready;
@@ -76,6 +86,18 @@ export async function disposeInpainter() {
   if (!_ready) return;
   try { const r = await _ready; await r.session?.release?.(); } catch (_) {}
   _ready = null;
+}
+
+// Grow the mask by ~r px (blur + threshold). Erasers must over-cover: a tight
+// mask leaves the object's halo/shadow behind, so we pad before inpainting.
+function dilateMask(mask, r) {
+  if (r <= 0) return mask;
+  const c = document.createElement('canvas'); c.width = mask.width; c.height = mask.height;
+  const g = c.getContext('2d');
+  g.filter = `blur(${r}px)`; g.drawImage(mask, 0, 0); g.filter = 'none';
+  const id = g.getImageData(0, 0, c.width, c.height), d = id.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = d[i] > 8 ? 255 : 0;   // threshold the feather back to solid
+  g.putImageData(id, 0, 0); return c;
 }
 
 // padded, clamped integer crop rect around the mask's opaque bbox
@@ -104,6 +126,8 @@ export async function inpaint(imageCanvas, maskCanvas, onStatus) {
 async function _inpaintInfer(imageCanvas, maskCanvas, onStatus) {
   {
     const { ort, session } = await ensure(onStatus);
+    const pad = Math.max(3, Math.min(28, Math.round(Math.max(imageCanvas.width, imageCanvas.height) * 0.012)));
+    maskCanvas = dilateMask(maskCanvas, pad);                   // pad so we catch the object's edges/halo
     const crop = maskBounds(maskCanvas);
     if (!crop) throw new Error('nothing marked to erase');
     onStatus && onStatus('erasing…');
