@@ -1338,10 +1338,16 @@ function importFile(file, input) {
     const r = new FileReader(); r.onload = () => { try { loadProject(JSON.parse(r.result)); } catch (e) { alert('Invalid project file: ' + e); } }; r.readAsText(file);
   } else {
     const r = new FileReader(); r.onload = (ev) => { const img = new Image(); img.onload = () => {
+      // Clamp imported photos (phone cameras are 4K–8K) so we never build a giant
+      // canvas that OOM-crashes mobile. Longest side capped to MAX_DOC.
+      const MAX_DOC = 3072;
+      const sc = Math.min(1, MAX_DOC / Math.max(img.width, img.height));
+      const W = Math.max(1, Math.round(img.width * sc)), H = Math.max(1, Math.round(img.height * sc));
       Sys.vom.Unregister(P.layers); for (const id of [...layerCanvases.keys()]) { layerCanvases.get(id).remove(); layerCanvases.delete(id); }
-      Sys.vom.Set(P.doc, 'width', img.width); Sys.vom.Set(P.doc, 'height', img.height);
+      Sys.vom.Set(P.doc, 'width', W); Sys.vom.Set(P.doc, 'height', H);
       seedLayers([{ id: 1, name: 'Painting Layer' }, { id: 2, name: 'Background Image' }]); reconcileLayers();
-      layerCanvases.get(2).getContext('2d').drawImage(img, 0, 0); History.clear(); pushUndo(); recenter(); setView('center'); hud('Imported image');
+      layerCanvases.get(2).getContext('2d').drawImage(img, 0, 0, W, H); History.clear(); pushUndo(); recenter(); setView('center');
+      hud(sc < 1 ? `Imported (scaled to ${W}×${H})` : 'Imported image');
     }; img.src = ev.target.result; }; r.readAsDataURL(file);
   }
   if (input) input.value = '';
@@ -1415,7 +1421,11 @@ async function aiEraseBg() {
   if (!cv) { hud('No active layer'); return; }
   if (getLayer(aid)?.locked) { hud('Layer is locked'); return; }
   const g = cv.getContext('2d');
-  const probe = g.getImageData(0, 0, cv.width, cv.height).data;
+  // cheap emptiness check on a tiny downscaled probe (avoid a full-res getImageData on phones)
+  const pw = Math.max(1, Math.min(64, cv.width)), ph = Math.max(1, Math.min(64, cv.height));
+  const pc = document.createElement('canvas'); pc.width = pw; pc.height = ph;
+  pc.getContext('2d').drawImage(cv, 0, 0, pw, ph);
+  const probe = pc.getContext('2d').getImageData(0, 0, pw, ph).data;
   let hasPixels = false; for (let i = 3; i < probe.length; i += 4) { if (probe[i] > 8) { hasPixels = true; break; } }
   if (!hasPixels) { hud('Active layer is empty — pick the image layer'); return; }
   aiBusy = true; setView('center'); hud('Loading AI…');

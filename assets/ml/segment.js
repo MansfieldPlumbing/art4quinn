@@ -9,6 +9,15 @@
 // and the model weights are cached by the browser (Cache Storage) so a phone
 // only fetches them once.
 //
+// MEMORY SAFETY (this is the important part on phones):
+//   * Input is downscaled to MAX_IN before inference. RMBG already runs at
+//     ~1024px internally, so a full 4K/8K photo is pure waste — and holding a
+//     full-res RawImage + a full-res getImageData buffer is what OOM-crashed an
+//     8GB S23. We never hold a full-res pixel buffer.
+//   * The mask is applied with GPU canvas compositing (destination-in), not a
+//     CPU getImageData loop, and the cut-out is capped at MAX_OUT.
+//   * A single-job lock stops two inferences from doubling peak memory.
+//
 // Runtime policy (June 2026 best practice):
 //   * WebGPU first  — default on Chrome 121+ (incl. Android / Pixel), 3–10x WASM.
 //   * WASM fallback — automatic when navigator.gpu is missing.
@@ -20,10 +29,14 @@
 
 const CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4';
 const MODEL = 'briaai/RMBG-1.4';
+const MAX_IN  = 1024;   // working resolution for inference (RMBG runs near this anyway)
+const MAX_OUT = 3072;   // cap the produced cut-out so phones don't OOM
 
-let _ready = null;   // memoised { T, model, processor, device }
+let _ready = null;      // memoised { T, model, processor, device }
+let _busy = false;      // single-job lock
 
 export function mlDevice() { return (typeof navigator !== 'undefined' && navigator.gpu) ? 'webgpu' : 'wasm'; }
+export function mlBusy() { return _busy; }
 
 // Load (once) the library + model. onStatus(text) is called with progress lines.
 async function ensureModel(onStatus) {
@@ -51,44 +64,75 @@ async function ensureModel(onStatus) {
   return _ready;
 }
 
-// Accept a URL string, <img>, <canvas> (or anything drawable) -> RawImage.
-async function toRawImage(T, src) {
-  if (typeof src === 'string') return await T.RawImage.read(src);
-  let canvas = src;
-  if (!(src instanceof HTMLCanvasElement)) {
-    canvas = document.createElement('canvas');
-    canvas.width = src.naturalWidth || src.width;
-    canvas.height = src.naturalHeight || src.height;
-    canvas.getContext('2d').drawImage(src, 0, 0);
+// Free the model/session and its GPU memory. Re-loading is automatic on next use.
+export async function disposeSegmenter() {
+  if (!_ready) return;
+  try { const r = await _ready; await r.model?.dispose?.(); } catch (_) {}
+  _ready = null;
+}
+
+// Resolve a URL string / <img> / <canvas> to a drawable + its natural size.
+async function loadDrawable(src) {
+  if (typeof src === 'string') {
+    const img = await new Promise((res, rej) => {
+      const im = new Image(); im.crossOrigin = 'anonymous';
+      im.onload = () => res(im); im.onerror = () => rej(new Error('load ' + src)); im.src = src;
+    });
+    return { img, w: img.naturalWidth, h: img.naturalHeight };
   }
-  const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
-  return await T.RawImage.read(blob);
+  return { img: src, w: src.naturalWidth || src.width, h: src.naturalHeight || src.height };
 }
 
-// Foreground matte. Returns { width, height, data:Uint8Array(w*h) } where
-// data[i] is the subject alpha (0 = background, 255 = subject), plus the
-// source RawImage so callers can re-composite without reloading.
+// Draw `img` into a fresh canvas, downscaled so the longest side <= maxSide.
+function scaledCanvas(img, w, h, maxSide) {
+  const s = Math.min(1, maxSide / Math.max(w, h));
+  const cw = Math.max(1, Math.round(w * s)), ch = Math.max(1, Math.round(h * s));
+  const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+  const g = c.getContext('2d'); g.imageSmoothingQuality = 'high';
+  g.drawImage(img, 0, 0, cw, ch);
+  return c;
+}
+
+// Foreground matte at the (downscaled) working resolution. Returns
+// { width, height, data:Uint8Array(w*h) (subject alpha 0..255), img, origW, origH }.
 export async function foregroundMask(src, onStatus) {
-  const { T, model, processor } = await ensureModel(onStatus);
-  onStatus && onStatus('finding the subject…');
-  const image = await toRawImage(T, src);
-  const { pixel_values } = await processor(image);
-  const { output } = await model({ input: pixel_values });
-  const mask = await T.RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(image.width, image.height);
-  return { width: image.width, height: image.height, data: mask.data, source: image };
+  if (_busy) throw new Error('AI is busy — let the current job finish');
+  _busy = true;
+  try {
+    const { T, model, processor } = await ensureModel(onStatus);
+    const { img, w, h } = await loadDrawable(src);
+    const inCanvas = scaledCanvas(img, w, h, MAX_IN);      // never hold a full-res buffer
+    onStatus && onStatus('finding the subject…');
+    const blob = await new Promise((r) => inCanvas.toBlob(r, 'image/png'));
+    const image = await T.RawImage.read(blob);
+    const { pixel_values } = await processor(image);
+    const { output } = await model({ input: pixel_values });
+    const mask = await T.RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(inCanvas.width, inCanvas.height);
+    return { width: inCanvas.width, height: inCanvas.height, data: mask.data, img, origW: w, origH: h };
+  } finally { _busy = false; }
 }
 
-// Background erase: returns a NEW canvas (subject kept, background transparent).
+// Background erase: returns a NEW canvas (subject kept, background transparent),
+// capped at MAX_OUT. Mask is applied with GPU compositing — no full-res CPU loop.
 export async function removeBackground(src, onStatus) {
   const m = await foregroundMask(src, onStatus);
-  const canvas = document.createElement('canvas');
-  canvas.width = m.width; canvas.height = m.height;
-  const g = canvas.getContext('2d');
-  g.drawImage(m.source.toCanvas(), 0, 0, m.width, m.height);
-  const id = g.getImageData(0, 0, m.width, m.height);
-  const d = id.data, mask = m.data;
-  for (let i = 0; i < mask.length; i++) d[i * 4 + 3] = mask[i];
-  g.putImageData(id, 0, 0);
+
+  // tiny mask canvas (working res) whose ALPHA channel is the matte
+  const mc = document.createElement('canvas'); mc.width = m.width; mc.height = m.height;
+  const mctx = mc.getContext('2d');
+  const mid = mctx.createImageData(m.width, m.height);
+  for (let i = 0; i < m.data.length; i++) mid.data[i * 4 + 3] = m.data[i];
+  mctx.putImageData(mid, 0, 0);
+
+  // output canvas capped at MAX_OUT; draw the (full-res) art then keep where mask is opaque
+  const s = Math.min(1, MAX_OUT / Math.max(m.origW, m.origH));
+  const ow = Math.max(1, Math.round(m.origW * s)), oh = Math.max(1, Math.round(m.origH * s));
+  const out = document.createElement('canvas'); out.width = ow; out.height = oh;
+  const octx = out.getContext('2d');
+  octx.imageSmoothingQuality = 'high';
+  octx.drawImage(m.img, 0, 0, ow, oh);
+  octx.globalCompositeOperation = 'destination-in';
+  octx.drawImage(mc, 0, 0, ow, oh);                       // soft matte, scaled on the GPU
   onStatus && onStatus('background erased');
-  return canvas;
+  return out;
 }
