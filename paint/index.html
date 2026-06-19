@@ -466,7 +466,7 @@ reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
 (() => {
   let startPt = null, rect = null;
   reg({ id: 'select', name: 'Select', type: 'select', cursor: 'cell',
-    onPointerDown(pt, c) { startPt = pt; rect = null; setSelection(null); c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
+    onPointerDown(pt, c) { startPt = pt; rect = null; c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
     onPointerMove(pt, c) {
       if (!startPt || !c.overlayCtx) return; const o = c.overlayCtx; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
       const x = Math.min(startPt.x, pt.x), y = Math.min(startPt.y, pt.y), w = Math.abs(startPt.x - pt.x), h = Math.abs(startPt.y - pt.y); rect = { x, y, w, h };
@@ -474,40 +474,47 @@ reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
       o.strokeStyle = '#3b82f6'; o.lineWidth = 2; o.setLineDash([6, 4]); o.strokeRect(x, y, w, h);
       o.strokeStyle = '#fff'; o.lineDashOffset = 6; o.strokeRect(x, y, w, h); o.setLineDash([]); o.restore();
     },
-    onPointerUp() { startPt = null; if (rect && rect.w > 2 && rect.h > 2) setSelection({ type: 'rect', bounds: rect }); } });
+    onPointerUp(pt, c) {
+      startPt = null;
+      if (rect && rect.w > 2 && rect.h > 2) {
+        const m = blankSelMask(c.canvas, false), sc = m.width / c.canvas.width, g = m.getContext('2d');
+        g.fillStyle = '#fff'; g.fillRect(rect.x * sc, rect.y * sc, rect.w * sc, rect.h * sc);
+        compositeSel(m, selMode(), c.canvas);
+      } else renderSelection();
+      rect = null;
+    } });
 })();
 
 (() => {
   let pts = [];
   reg({ id: 'lasso', name: 'Lasso', type: 'select', cursor: 'crosshair',
-    onPointerDown(pt, c) { pts = [pt]; setSelection(null); c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
+    onPointerDown(pt, c) { pts = [pt]; c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
     onPointerMove(pt, c) {
       if (!pts.length || !c.overlayCtx) return; pts.push(pt); const o = c.overlayCtx; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
       o.save(); o.beginPath(); o.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) o.lineTo(pts[i].x, pts[i].y);
       o.fillStyle = 'rgba(59,130,246,0.15)'; o.fill(); o.strokeStyle = '#3b82f6'; o.lineWidth = 2; o.setLineDash([5, 3]); o.stroke(); o.setLineDash([]); o.restore();
     },
     onPointerUp(pt, c) {
-      if (pts.length < 2 || !c.overlayCtx) { pts = []; return; }
-      const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
-      const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-      setSelection({ type: 'lasso', bounds: { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) }, points: [...pts] }); pts = [];
+      if (pts.length < 3) { pts = []; renderSelection(); return; }
+      const m = blankSelMask(c.canvas, false); drawLassoInto(m, pts, c); pts = [];
+      compositeSel(m, selMode(), c.canvas);
     } });
 })();
 
 reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
   onPointerDown(pt, c) {
-    if (!c.overlayCtx) return; c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); setSelection(null);
+    if (!c.overlayCtx) return;
     const W = c.canvas.width, H = c.canvas.height; if (W <= 0) return;
     const sx = Math.round(pt.x), sy = Math.round(pt.y); if (sx < 0 || sx >= W || sy < 0 || sy >= H) return;
-    const src = c.ctx.getImageData(0, 0, W, H).data; const dest = c.overlayCtx.createImageData(W, H); const dd = dest.data;
+    const src = c.ctx.getImageData(0, 0, W, H).data;
+    const maskFull = document.createElement('canvas'); maskFull.width = W; maskFull.height = H;
+    const mctx = maskFull.getContext('2d'); const dest = mctx.createImageData(W, H); const dd = dest.data;
     const si = (sy * W + sx) * 4, tR = src[si], tG = src[si + 1], tB = src[si + 2], tA = src[si + 3];
     const q = new Int32Array(W * H); let head = 0, tail = 0; const vis = new Uint8Array(W * H);
-    const s0 = sy * W + sx; q[tail++] = s0; vis[s0] = 1; const tol = session('tolerance'), maxP = 200000; let n = 0;
-    let minX = W, maxX = 0, minY = H, maxY = 0;
+    const s0 = sy * W + sx; q[tail++] = s0; vis[s0] = 1; const tol = session('tolerance'), maxP = 4000000; let n = 0;
     while (head < tail && n < maxP) {
       const ci = q[head++], cy = (ci / W) | 0, cx = ci % W; n++;
-      if (cx < minX) minX = cx; if (cx > maxX) maxX = cx; if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
-      const off = ci * 4; dd[off] = 59; dd[off + 1] = 130; dd[off + 2] = 246; dd[off + 3] = 100;
+      dd[ci * 4 + 3] = 255;                              // opaque where selected -> real mask
       const nb = [[cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1]];
       for (const [nx, ny] of nb) {
         if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue; const ni = ny * W + nx; if (vis[ni]) continue; vis[ni] = 1;
@@ -515,8 +522,8 @@ reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
         if (diff <= tol) q[tail++] = ni;
       }
     }
-    c.overlayCtx.putImageData(dest, 0, 0);
-    if (n > 0) setSelection({ type: 'magic', bounds: { x: minX, y: minY, w: Math.max(1, maxX - minX + 1), h: Math.max(1, maxY - minY + 1) } });
+    mctx.putImageData(dest, 0, 0);
+    if (n > 0) compositeSel(maskFull, selMode(), c.canvas);
   },
   onPointerMove() {}, onPointerUp() {} });
 
@@ -714,6 +721,7 @@ function toolCtx() {
 /* ---- pointer handling: draw / pan / pinch / wheel ---- */
 const pointers = new Map();
 let drawing = false, panning = false, spaceDown = false;
+let selMods = { shift: false, alt: false };   // captured at pointerdown -> add/subtract selection modes
 let dragStart = { ex: 0, ey: 0, tx: 0, ty: 0 };
 let pinch = null;
 
@@ -732,7 +740,7 @@ function initEngine() {
       // oversized crop). Pan is middle/right-drag, space-drag, or the Hand tool.
       const wantPan = session('tool') === 'hand' || e.button === 1 || e.button === 2 || spaceDown;
       if (wantPan) { panning = true; drawing = false; dragStart = { ex: e.clientX, ey: e.clientY, tx: view.x, ty: view.y }; }
-      else { panning = false; drawing = true; const c = toolCtx(); const t = Tools[session('tool')]; if (c && t && t.onPointerDown) t.onPointerDown(pt, c); }
+      else { panning = false; drawing = true; selMods = { shift: e.shiftKey, alt: e.altKey }; const c = toolCtx(); const t = Tools[session('tool')]; if (c && t && t.onPointerDown) t.onPointerDown(pt, c); }
     } else if (pointers.size === 2) {
       drawing = false; panning = false; const p = [...pointers.values()];
       const dx = p[1].x - p[0].x, dy = p[1].y - p[0].y; const rect = vp.getBoundingClientRect();
@@ -796,6 +804,7 @@ function initEngine() {
       else if (k === 'x') { e.preventDefault(); doCut(); }
       else if (k === 'a') { e.preventDefault(); selectAll(); }
       else if (k === 'd') { e.preventDefault(); deselect(); }
+      else if (k === 'i' && e.shiftKey) { e.preventDefault(); selInvert(); }
       return;
     }
     if (e.key === 'Escape') { deselect(); return; }
@@ -815,17 +824,23 @@ function refreshCursor() { const t = Tools[session('tool')]; $('#viewport').styl
 
 /* ---- copy / cut / paste ---- */
 function doCopy() {
-  const aid = doc('activeLayerId'); const cv = layerCanvases.get(aid); if (!cv) return; const sel = doc('selection');
+  const cv = layerCanvases.get(doc('activeLayerId')); if (!cv) return; const sel = doc('selection');
   const out = document.createElement('canvas');
   if (!sel || !sel.bounds) { out.width = cv.width; out.height = cv.height; out.getContext('2d').drawImage(cv, 0, 0); window.__clip = { canvas: out, x: 0, y: 0 }; hud('Copied entire layer'); return; }
-  const b = sel.bounds; if (b.w <= 0 || b.h <= 0) { hud('Selection too small'); return; }
-  out.width = b.w; out.height = b.h; const oc = out.getContext('2d');
-  if (sel.type === 'lasso' && sel.points) { oc.save(); oc.beginPath(); oc.moveTo(sel.points[0].x - b.x, sel.points[0].y - b.y); sel.points.forEach((p) => oc.lineTo(p.x - b.x, p.y - b.y)); oc.closePath(); oc.clip(); oc.drawImage(cv, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h); oc.restore(); }
-  else oc.drawImage(cv, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
-  window.__clip = { canvas: out, x: b.x, y: b.y }; hud('Copied selection');
+  const b = sel.bounds; if (b.w < 1 || b.h < 1) { hud('Selection too small'); return; }
+  const mask = selectionToMask(sel, cv.width, cv.height);
+  out.width = Math.round(b.w); out.height = Math.round(b.h); const oc = out.getContext('2d');
+  oc.drawImage(cv, b.x, b.y, b.w, b.h, 0, 0, out.width, out.height);
+  oc.globalCompositeOperation = 'destination-in'; oc.drawImage(mask, b.x, b.y, b.w, b.h, 0, 0, out.width, out.height);   // clip to the exact mask shape
+  window.__clip = { canvas: out, x: Math.round(b.x), y: Math.round(b.y) }; hud('Copied selection');
 }
-function doCut() { const aid = doc('activeLayerId'); const cv = layerCanvases.get(aid); if (!cv) return; doCopy(); pushUndo(); const g = cv.getContext('2d'); const sel = doc('selection');
-  if (!sel || !sel.bounds) g.clearRect(0, 0, cv.width, cv.height); else g.clearRect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h); hud('Cut'); }
+function doCut() {
+  const cv = layerCanvases.get(doc('activeLayerId')); if (!cv) return; const sel = doc('selection'); doCopy(); pushUndo();
+  const g = cv.getContext('2d');
+  if (!sel) g.clearRect(0, 0, cv.width, cv.height);
+  else { const mask = selectionToMask(sel, cv.width, cv.height); g.save(); g.globalCompositeOperation = 'destination-out'; g.drawImage(mask, 0, 0); g.restore(); }
+  hud('Cut');
+}
 function doPaste() {
   const clip = window.__clip; if (!clip) { hud('Clipboard empty'); return; } pushUndo();
   const id = Date.now(); const order = getOrder(); const aidx = order.indexOf(doc('activeLayerId'));
@@ -867,6 +882,17 @@ function buildLeft() {
     <h3 class="section" style="margin:10px 0 6px">${cat.title}</h3>
     <div class="toolwrap">${cat.tools.map((t) => `
       <button class="toolcell" data-tool="${t.id}" title="${t.label}">${icon(t.icon)}<span>${t.label}</span></button>`).join('')}</div>`).join('') + `
+    <h3 class="section" style="margin:14px 0 6px">Selection</h3>
+    <p class="muted" style="font-size:10px;margin:0 2px 7px;line-height:1.5">Hold <b>Shift</b> to add · <b>Alt</b> to subtract</p>
+    <div class="row" style="gap:6px">
+      <button class="btn-soft" id="sel-invert" style="flex:1" title="Invert (Ctrl+Shift+I)">Invert</button>
+      <button class="btn-soft" id="sel-grow" style="flex:1" title="Grow">Grow</button>
+      <button class="btn-soft" id="sel-shrink" style="flex:1" title="Shrink">Shrink</button>
+    </div>
+    <div class="row" style="gap:6px;margin-top:6px">
+      <button class="btn-soft" id="sel-feather" style="flex:1" title="Soften the edge">Feather</button>
+      <button class="btn-soft" id="sel-none" style="flex:1" title="Deselect (Ctrl+D)">Deselect</button>
+    </div>
     <h3 class="section" style="margin:14px 0 6px">AI Eraser</h3>
     <div class="toolwrap" id="ai-modes">
       <button class="toolcell" data-aimode="tap" title="Tap an object — AI selects it"><span style="font-size:18px">🪄</span><span>Tap</span></button>
@@ -893,6 +919,11 @@ function buildLeft() {
   $('#ai-erase').onclick = () => aiMagicErase();
   $('#ai-bg').onclick = () => aiEraseBg();
   $('#ai-about').onclick = () => showAiAbout();
+  $('#sel-invert').onclick = () => selInvert();
+  $('#sel-grow').onclick = () => selExpand(4);
+  $('#sel-shrink').onclick = () => selExpand(-4);
+  $('#sel-feather').onclick = () => selFeather(3);
+  $('#sel-none').onclick = () => deselect();
 
   // Brushes
   const brushes = Sys.registry.Resolve('\\Catalog\\Brushes');
@@ -1546,6 +1577,40 @@ function publishSelMask(maskCanvas, cv) {
   const sx = cv.width / maskCanvas.width, sy = cv.height / maskCanvas.height;
   setSelection({ type: 'aimask', mask: maskCanvas, bounds: { x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy } });
 }
+// add/subtract/intersect mode from the modifier keys held at pointerdown
+function selMode() { return selMods.alt ? 'subtract' : selMods.shift ? 'add' : 'replace'; }
+// composite an incoming mask (any size) into the current selection per mode, then publish
+function compositeSel(incoming, mode, cv) {
+  const base = blankSelMask(cv, mode !== 'replace');   // seed with current selection unless replacing
+  const g = base.getContext('2d');
+  g.globalCompositeOperation = mode === 'subtract' ? 'destination-out' : mode === 'intersect' ? 'destination-in' : 'source-over';
+  g.drawImage(incoming, 0, 0, base.width, base.height);
+  g.globalCompositeOperation = 'source-over';
+  pushUndo(); publishSelMask(base, cv);
+}
+// selection ops (all undoable)
+function selInvert() {
+  const cv = layerCanvases.get(doc('activeLayerId')); if (!cv) return;
+  const m = blankSelMask(cv, false); const g = m.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, m.width, m.height);
+  const s = doc('selection'); if (s) { const cur = selectionToMask(s, cv.width, cv.height); g.globalCompositeOperation = 'destination-out'; g.drawImage(cur, 0, 0, m.width, m.height); g.globalCompositeOperation = 'source-over'; }
+  pushUndo(); publishSelMask(m, cv); hud('Inverted selection');
+}
+function selExpand(px) {                                 // +grow / -shrink (blur + threshold)
+  const cv = layerCanvases.get(doc('activeLayerId')); const s = doc('selection'); if (!cv || !s || !s.mask) { hud('Select something first'); return; }
+  const m = document.createElement('canvas'); m.width = s.mask.width; m.height = s.mask.height; const g = m.getContext('2d');
+  const r = Math.max(0.5, Math.abs(px) * (m.width / cv.width));
+  g.filter = `blur(${r}px)`; g.drawImage(s.mask, 0, 0); g.filter = 'none';
+  const id = g.getImageData(0, 0, m.width, m.height), d = id.data, t = px >= 0 ? 20 : 235;   // low thr grows, high thr shrinks
+  for (let i = 3; i < d.length; i += 4) d[i] = d[i] > t ? 255 : 0;
+  g.putImageData(id, 0, 0); pushUndo(); publishSelMask(m, cv); hud(px >= 0 ? 'Grew selection' : 'Shrank selection');
+}
+function selFeather(px) {
+  const cv = layerCanvases.get(doc('activeLayerId')); const s = doc('selection'); if (!cv || !s || !s.mask) { hud('Select something first'); return; }
+  const m = document.createElement('canvas'); m.width = s.mask.width; m.height = s.mask.height; const g = m.getContext('2d');
+  g.filter = `blur(${Math.max(0.5, px * (m.width / cv.width))}px)`; g.drawImage(s.mask, 0, 0); g.filter = 'none';   // keep soft alpha
+  pushUndo(); publishSelMask(m, cv); hud('Feathered selection');
+}
+
 // draw whatever is in doc('selection') onto the overlay (bound to P.doc -> undo/redo re-renders free)
 function renderSelection() {
   if (!overlayCanvas.width) return;
@@ -1592,15 +1657,12 @@ async function aiTap(pt, c) {                          // SAM point prompt
     const key = doc('activeLayerId') + ':' + c.canvas.width + 'x' + c.canvas.height;
     const { mask, any } = await selectAt(c.canvas, pt.x, pt.y, key, (s) => hud(s));
     if (!any) { hud('No object found there — aim for its centre'); return; }
-    pushUndo();
-    const m = blankSelMask(c.canvas, true); m.getContext('2d').drawImage(mask, 0, 0, m.width, m.height);
-    publishSelMask(m, c.canvas); hud('Selected ✨ — refine, or Erase');
+    compositeSel(mask, selMode(), c.canvas); hud('Selected ✨ — refine, or Erase');
   } catch (e) { console.error(e); hud('Wand failed — ' + (e.message || e)); }
   finally { aiBusy = false; }
 }
 async function aiLassoCommit(pts, c) {                 // lasso -> SAM box (snap) or raw outline
-  pushUndo();
-  const m = blankSelMask(c.canvas, true);
+  const incoming = blankSelMask(c.canvas, false);      // only the new shape; compositeSel merges it
   if (aiSnap) {
     if (aiBusy) { renderSelection(); return; } aiNoticeOnce(); aiBusy = true; hud('Loading magic wand…');
     try {
@@ -1609,12 +1671,12 @@ async function aiLassoCommit(pts, c) {                 // lasso -> SAM box (snap
       const { selectBox } = await import('../assets/ml/select.js');
       const key = doc('activeLayerId') + ':' + c.canvas.width + 'x' + c.canvas.height;
       const { mask, any } = await selectBox(c.canvas, box, key, (s) => hud(s));
-      if (any) { m.getContext('2d').drawImage(mask, 0, 0, m.width, m.height); hud('Snapped to object ✨'); }
-      else { drawLassoInto(m, pts, c); hud('No object found — kept your outline'); }
-    } catch (e) { console.error(e); drawLassoInto(m, pts, c); hud('AI snap failed — kept your outline'); }
+      if (any) { incoming.getContext('2d').drawImage(mask, 0, 0, incoming.width, incoming.height); hud('Snapped to object ✨'); }
+      else { drawLassoInto(incoming, pts, c); hud('No object found — kept your outline'); }
+    } catch (e) { console.error(e); drawLassoInto(incoming, pts, c); hud('AI snap failed — kept your outline'); }
     finally { aiBusy = false; }
-  } else { drawLassoInto(m, pts, c); }
-  publishSelMask(m, c.canvas);
+  } else { drawLassoInto(incoming, pts, c); }
+  compositeSel(incoming, selMode(), c.canvas);
 }
 function selectionToMask(sel, W, H) {                   // -> layer-size mask for the eraser
   if (!sel) return null;
@@ -1719,7 +1781,7 @@ function cropTo(rect) {
 }
 
 /* ---- selection shortcuts ---- */
-function selectAll() { const W = doc('width'), H = doc('height'); if (!W) return; pushUndo(); setSelection({ type: 'rect', bounds: { x: 0, y: 0, w: W, h: H } }); hud('Selected all'); }
+function selectAll() { const cv = layerCanvases.get(doc('activeLayerId')); if (!cv) return; const m = blankSelMask(cv, false); const g = m.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, m.width, m.height); pushUndo(); publishSelMask(m, cv); hud('Selected all'); }
 function deselect() { if (doc('selection')) { pushUndo(); setSelection(null); } }
 function deleteSelection() {
   const aid = doc('activeLayerId'); const cv = layerCanvases.get(aid); const sel = doc('selection');
