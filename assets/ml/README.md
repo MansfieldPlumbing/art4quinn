@@ -1,7 +1,22 @@
 # assets/ml — on-device ML harness
 
-Shared, build-free ML for art4quinn. One module (`segment.js`) powers the
-**background-erase / cut-out** across all three apps (paint, three, gallery).
+Shared, build-free ML for art4quinn. Three modules power the AI tools across the
+apps:
+
+- `segment.js` — **background erase / cut-out** (RMBG-1.4). Used by paint, three, gallery.
+- `select.js` — **AI Magic Wand**: tap-to-select an object (SlimSAM). Used by paint.
+- `inpaint.js` — **Magic Eraser**: content-aware fill / object removal (LaMa, onnxruntime-web). Used by paint.
+
+All three follow the same memory-safe pattern (downscale before inference, GPU
+compositing, single-job lock, `dispose*()` to free memory). `select.js`/`inpaint.js`
+chain through paint's existing selection: the Wand makes a mask selection, the
+Eraser consumes it.
+
+> ⚠ `inpaint.js` (LaMa) talks raw ONNX and downloads a ~200MB model. Its tensor
+> I/O names + value range are auto-detected but **should be verified on-device**;
+> see the header comment in `inpaint.js`.
+
+Below documents the original background-erase (`segment.js`).
 
 ## How it works
 - Lazy-loads [Transformers.js](https://huggingface.co/docs/transformers.js) from the
