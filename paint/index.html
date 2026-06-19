@@ -520,22 +520,26 @@ reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
   },
   onPointerMove() {}, onPointerUp() {} });
 
-// AI Magic Wand — tap an object to select it (SlimSAM). Produces a pixel-mask selection.
-reg({ id: 'aiwand', name: 'AI Wand', type: 'select', cursor: 'crosshair',
-  async onPointerDown(pt, c) {
-    if (aiBusy) return; aiNoticeOnce(); aiBusy = true; hud('Loading magic wand…');
-    try {
-      const { selectAt } = await import('../assets/ml/select.js');
-      const key = doc('activeLayerId') + ':' + c.canvas.width + 'x' + c.canvas.height;
-      const { mask, bounds, any } = await selectAt(c.canvas, pt.x, pt.y, key, (s) => hud(s));
-      if (!any) { hud('No object found there — aim for its centre'); return; }
-      if (c.overlayCtx) drawNeonSelection(c.overlayCtx, mask);
-      setSelection({ type: 'aimask', bounds, mask });
-      hud('Selected ✨ — Magic Eraser to remove, or Cut/Copy');
-    } catch (e) { console.error(e); hud('Wand failed — ' + (e.message || e)); }
-    finally { aiBusy = false; }
+// AI selection refine — one tool, four modes (wand tap / add brush / remove brush / lasso).
+// Every mode edits ONE accumulating mask (aiMask) with its own undo/redo; the Magic
+// Eraser then commits that mask. (Like the Google/Samsung select-then-refine flow.)
+let aiMode = 'wand', _lasso = null;
+reg({ id: 'airefine', name: 'AI Select', type: 'select', cursor: 'crosshair',
+  onPointerDown(pt, c) {
+    ensureAiMask();
+    if (aiMode === 'wand') { aiWandTap(pt, c); return; }
+    aiSnapshot();
+    if (aiMode === 'lasso') { _lasso = [pt]; return; }
+    aiPaintMask(pt, aiMode === 'remove');
   },
-  onPointerMove() {}, onPointerUp() {} });
+  onPointerMove(pt) {
+    if (aiMode === 'add' || aiMode === 'remove') aiPaintMask(pt, aiMode === 'remove');
+    else if (aiMode === 'lasso' && _lasso) { _lasso.push(pt); aiLassoPreview(_lasso); }
+  },
+  onPointerUp() {
+    if (aiMode === 'lasso' && _lasso) { if (_lasso.length > 2) aiFillLasso(_lasso); _lasso = null; }
+    if (aiMode !== 'wand') refreshAiSel();
+  } });
 
 (() => {
   let startPt = null, cropRect = null;
@@ -857,14 +861,30 @@ function buildLeft() {
     <h3 class="section" style="margin:10px 0 6px">${cat.title}</h3>
     <div class="toolwrap">${cat.tools.map((t) => `
       <button class="toolcell" data-tool="${t.id}" title="${t.label}">${icon(t.icon)}<span>${t.label}</span></button>`).join('')}</div>`).join('') + `
-    <h3 class="section" style="margin:14px 0 6px">AI</h3>
-    <div class="toolwrap">
-      <button class="toolcell" data-tool="aiwand" title="AI Magic Wand — tap an object to select it"><span style="font-size:18px">🪄</span><span>Wand</span></button>
-      <button class="toolcell" id="ai-erase" title="Magic Eraser — remove the selection and fill it in"><span style="font-size:18px">🩹</span><span>Eraser</span></button>
-      <button class="toolcell" id="ai-bg" title="Erase Background — cut the subject out"><span style="font-size:18px">✂️</span><span>Cut BG</span></button>
+    <h3 class="section" style="margin:14px 0 6px">AI Eraser</h3>
+    <div class="toolwrap" id="ai-modes">
+      <button class="toolcell" data-aimode="wand" title="Tap an object to select it"><span style="font-size:18px">🪄</span><span>Wand</span></button>
+      <button class="toolcell" data-aimode="add" title="Brush to add to the selection"><span style="font-size:18px">➕</span><span>Add</span></button>
+      <button class="toolcell" data-aimode="remove" title="Brush to erase from the selection"><span style="font-size:18px">➖</span><span>Remove</span></button>
+      <button class="toolcell" data-aimode="lasso" title="Draw around something (no AI)"><span style="font-size:18px">✏️</span><span>Lasso</span></button>
     </div>
-    <button id="ai-about" class="muted" style="display:flex;align-items:center;gap:6px;margin:8px 2px 0;font-size:10px;background:none;text-align:left;width:100%"><span>ℹ️</span><span>How the AI tools work</span></button>`;
+    <div class="row" style="margin-top:8px;gap:6px">
+      <button class="toolcell" id="ai-undo" style="flex:1" title="Undo selection"><span style="font-size:16px">↶</span><span>Undo</span></button>
+      <button class="toolcell" id="ai-redo" style="flex:1" title="Redo selection"><span style="font-size:16px">↷</span><span>Redo</span></button>
+      <button class="toolcell" id="ai-clear" style="flex:1" title="Clear selection"><span style="font-size:16px">⌫</span><span>Clear</span></button>
+    </div>
+    <button class="btn-primary" id="ai-erase" style="margin-top:10px">🩹 Erase selection</button>
+    <button class="btn-soft" id="ai-bg" style="margin-top:6px">✂️ Erase background</button>
+    <button id="ai-about" class="muted" style="display:flex;align-items:center;gap:6px;margin:10px 2px 0;font-size:10px;background:none;text-align:left;width:100%"><span>ℹ️</span><span>How the AI tools work</span></button>`;
   $('#pane-tools').querySelectorAll('[data-tool]').forEach((b) => b.onclick = () => setSession('tool', b.dataset.tool));
+  const aiModeBtns = [...$('#pane-tools').querySelectorAll('[data-aimode]')];
+  aiModeBtns.forEach((b) => b.onclick = () => {
+    aiMode = b.dataset.aimode; setSession('tool', 'airefine'); ensureAiMask();
+    aiModeBtns.forEach((x) => x.classList.toggle('on', x === b));
+  });
+  $('#ai-undo').onclick = () => aiUndoSel();
+  $('#ai-redo').onclick = () => aiRedoSel();
+  $('#ai-clear').onclick = () => aiClearSel();
   $('#ai-erase').onclick = () => aiMagicErase();
   $('#ai-bg').onclick = () => aiEraseBg();
   $('#ai-about').onclick = () => showAiAbout();
@@ -893,6 +913,7 @@ function buildLeft() {
   bind(P.session, () => {
     const tool = session('tool');
     p.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === tool));
+    if (tool !== 'airefine') p.querySelectorAll('[data-aimode]').forEach((b) => b.classList.remove('on'));
     p.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('on', b.dataset.color === session('color')));
     lsSize.value = session('brushSize'); $('#ls-size-v').textContent = session('brushSize') + 'px';
     lsOp.value = session('opacity'); $('#ls-op-v').textContent = session('opacity') + '%';
@@ -1496,6 +1517,93 @@ function drawNeonSelection(octx, maskCanvas) {
   octx.drawImage(ring, 0, 0); octx.drawImage(ring, 0, 0);                                 // double pass = stronger glow
   octx.restore();
 }
+
+/* ---- AI refine mask: an editable selection (wand + add/remove brush + lasso) with its own undo/redo ---- */
+let aiMask = null, aiMaskScale = 1;
+const aiHist = [], aiRedo = [];
+function ensureAiMask() {
+  const cv = layerCanvases.get(doc('activeLayerId')); if (!cv) return null;
+  const cap = 1280, s = Math.min(1, cap / Math.max(cv.width, cv.height));   // work at a light resolution
+  const w = Math.max(1, Math.round(cv.width * s)), h = Math.max(1, Math.round(cv.height * s));
+  if (!aiMask || aiMask.width !== w || aiMask.height !== h) {
+    const m = document.createElement('canvas'); m.width = w; m.height = h;
+    if (aiMask) m.getContext('2d').drawImage(aiMask, 0, 0, w, h);
+    aiMask = m;
+  }
+  aiMaskScale = aiMask.width / cv.width;
+  return cv;
+}
+function maskBoundsCanvas(cnv) {
+  const W = cnv.width, H = cnv.height, d = cnv.getContext('2d').getImageData(0, 0, W, H).data;
+  let minX = W, minY = H, maxX = -1, maxY = -1;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (d[(y * W + x) * 4 + 3] > 16) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+  return maxX < 0 ? null : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+function aiSnapshot() {
+  if (!aiMask) return;
+  const c = document.createElement('canvas'); c.width = aiMask.width; c.height = aiMask.height; c.getContext('2d').drawImage(aiMask, 0, 0);
+  aiHist.push(c); if (aiHist.length > 14) aiHist.shift(); aiRedo.length = 0;
+}
+function aiRestore(from, to) {
+  if (!aiMask || !from.length) { hud(from === aiHist ? 'Nothing to undo' : 'Nothing to redo'); return; }
+  const cur = document.createElement('canvas'); cur.width = aiMask.width; cur.height = aiMask.height; cur.getContext('2d').drawImage(aiMask, 0, 0); to.push(cur);
+  const snap = from.pop(); const g = aiMask.getContext('2d'); g.clearRect(0, 0, aiMask.width, aiMask.height); g.drawImage(snap, 0, 0); refreshAiSel();
+}
+// cheap live preview while brushing (no blur/glow, no big allocation)
+function aiPreview() {
+  const octx = overlayCanvas.getContext('2d'); octx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  if (!aiMask) return; octx.save(); octx.globalAlpha = 0.30;
+  octx.drawImage(tintMask(aiMask, '180,222,255'), 0, 0, overlayCanvas.width, overlayCanvas.height); octx.restore();
+}
+// full neon highlight + publish the selection (at rest)
+function refreshAiSel() {
+  const cv = layerCanvases.get(doc('activeLayerId')); const octx = overlayCanvas.getContext('2d');
+  octx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  if (!cv || !aiMask) { setSelection(null); return; }
+  const b = maskBoundsCanvas(aiMask);
+  if (!b) { setSelection(null); return; }
+  const full = document.createElement('canvas'); full.width = cv.width; full.height = cv.height;
+  full.getContext('2d').drawImage(aiMask, 0, 0, cv.width, cv.height);
+  const sx = cv.width / aiMask.width, sy = cv.height / aiMask.height;
+  setSelection({ type: 'aimask', bounds: { x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy }, mask: full });
+  drawNeonSelection(octx, full);
+}
+function aiPaintMask(pt, erase) {
+  if (!aiMask) return; const g = aiMask.getContext('2d');
+  const r = Math.max(2, session('brushSize') * aiMaskScale);
+  g.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+  g.fillStyle = '#fff'; g.beginPath(); g.arc(pt.x * aiMaskScale, pt.y * aiMaskScale, r, 0, Math.PI * 2); g.fill();
+  g.globalCompositeOperation = 'source-over';
+  aiPreview();
+}
+function aiFillLasso(pts) {
+  const g = aiMask.getContext('2d'); g.fillStyle = '#fff'; g.beginPath();
+  g.moveTo(pts[0].x * aiMaskScale, pts[0].y * aiMaskScale);
+  for (let i = 1; i < pts.length; i++) g.lineTo(pts[i].x * aiMaskScale, pts[i].y * aiMaskScale);
+  g.closePath(); g.fill();
+}
+function aiLassoPreview(pts) {
+  aiPreview();
+  const o = overlayCanvas.getContext('2d'); o.save();
+  o.strokeStyle = '#eaf6ff'; o.lineWidth = 2; o.shadowColor = 'rgba(150,210,255,0.9)'; o.shadowBlur = 8;
+  o.beginPath(); o.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) o.lineTo(pts[i].x, pts[i].y); o.stroke(); o.restore();
+}
+async function aiWandTap(pt, c) {
+  if (aiBusy) return; aiNoticeOnce(); aiBusy = true; hud('Loading magic wand…');
+  try {
+    const { selectAt } = await import('../assets/ml/select.js');
+    const key = doc('activeLayerId') + ':' + c.canvas.width + 'x' + c.canvas.height;
+    const { mask, any } = await selectAt(c.canvas, pt.x, pt.y, key, (s) => hud(s));
+    if (!any) { hud('No object found there — aim for its centre'); return; }
+    aiSnapshot();
+    aiMask.getContext('2d').drawImage(mask, 0, 0, aiMask.width, aiMask.height);   // union into the mask
+    refreshAiSel(); hud('Selected ✨ — refine with ＋/− or Lasso, then Erase');
+  } catch (e) { console.error(e); hud('Wand failed — ' + (e.message || e)); }
+  finally { aiBusy = false; }
+}
+function aiUndoSel() { aiRestore(aiHist, aiRedo); }
+function aiRedoSel() { aiRestore(aiRedo, aiHist); }
+function aiClearSel() { if (aiMask) { aiSnapshot(); aiMask.getContext('2d').clearRect(0, 0, aiMask.width, aiMask.height); refreshAiSel(); hud('Selection cleared'); } }
 function selectionToMask(sel, W, H) {
   if (!sel) return null;
   if (sel.mask) return sel.mask;                         // AI wand provides a pixel mask
@@ -1522,6 +1630,7 @@ async function aiMagicErase() {
     const g = cv.getContext('2d'); g.clearRect(0, 0, cv.width, cv.height); g.drawImage(patched, 0, 0);
     setSelection(null);
     overlayCanvas.getContext('2d').clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    aiMask = null; aiHist.length = 0; aiRedo.length = 0;          // reset the refine selection
     reconcileLayers(); hud('Erased ✨');
   } catch (e) { console.error(e); hud('Magic eraser failed — ' + (e.message || e)); }
   finally { aiBusy = false; }
@@ -1539,7 +1648,7 @@ function showAiAbout() {
           <button class="iconbtn" id="ai-about-x" style="width:30px;height:30px;font-size:20px">×</button>
         </div>
         <div style="font-size:12px;line-height:1.6;color:rgba(255,255,255,0.82);display:flex;flex-direction:column;gap:10px">
-          <p style="margin:0"><b>🪄 Wand</b> — tap an object to select it. <b>🩹 Eraser</b> — removes the selection and fills it back in. <b>✂️ Cut BG</b> — erases the background.</p>
+          <p style="margin:0"><b>🪄 Wand</b> taps to select an object, then refine with <b>➕ Add</b> / <b>➖ Remove</b> / <b>✏️ Lasso</b> (with selection Undo/Redo). <b>🩹 Erase selection</b> removes it and fills it back in; <b>✂️ Erase background</b> cuts the subject out.</p>
           <p style="margin:0"><b>Private &amp; on your device.</b> Your pictures never leave this device — the AI runs right here in the browser, nothing is uploaded.</p>
           <p style="margin:0"><b>First use downloads a model</b> (one time, then it's saved for next time). The Eraser model is large (~200&nbsp;MB) — use Wi‑Fi the first time.</p>
           <p style="margin:0"><b>It's experimental.</b> Results can vary or surprise you — tap <b>Undo</b> (↶) to take anything back. Works best in a recent Chrome with graphics acceleration on.</p>
