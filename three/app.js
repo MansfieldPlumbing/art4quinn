@@ -141,6 +141,31 @@ function processImage(img) {
   return { w, h, isBg, base };
 }
 
+// ---------------------------------------------------------------- AI silhouette (on-device matte)
+// Same { w, h, isBg, base } shape as processImage, but the alpha comes from RMBG-1.4 instead of a
+// corner flood-fill — so characters on non-flat backgrounds key out cleanly.
+let aiSilhouette = false, lastCh = null;
+async function processImageAI(img) {
+  const { foregroundMask } = await import('../assets/ml/segment.js');
+  const m = await foregroundMask(img, setStatus);            // m.data[i] = subject alpha 0..255
+  const scale = Math.min(1, MAX_TEX / Math.max(m.width, m.height));
+  const w = Math.round(m.width * scale), h = Math.round(m.height * scale);
+  const base = document.createElement('canvas'); base.width = w; base.height = h;
+  const bctx = base.getContext('2d');
+  bctx.drawImage(img, 0, 0, w, h);
+  const id = bctx.getImageData(0, 0, w, h), d = id.data;
+  const isBg = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const mx = Math.min(m.width - 1, Math.floor((x + 0.5) / w * m.width));
+    const my = Math.min(m.height - 1, Math.floor((y + 0.5) / h * m.height));
+    const p = y * w + x;
+    if (m.data[my * m.width + mx] < 128) { isBg[p] = 1; d[p * 4 + 3] = 0; } else { d[p * 4 + 3] = 255; }
+  }
+  bctx.putImageData(id, 0, 0);
+  return { w, h, isBg, base };
+}
+const maskImage = (img) => aiSilhouette ? processImageAI(img) : Promise.resolve(processImage(img));
+
 // ---------------------------------------------------------------- mask -> 3-group extruded geometry
 // groups: 0 = front faces (front skin), 1 = back faces (back skin), 2 = side walls (edge)
 function buildGeometry(mask) {
@@ -298,14 +323,15 @@ function loadImage(url) {
 }
 
 async function loadCharacter(ch) {
+  lastCh = ch;
   setStatus(`loading ${ch.name}…`);
   try {
     const frontImg = await loadImage(ch.front);
-    const mask = processImage(frontImg);          // silhouette comes from the FRONT sheet
+    const mask = await maskImage(frontImg);        // silhouette comes from the FRONT sheet
     const geo = buildGeometry(mask);
     const frontSkin = new Skin(mask.base);
     let backSkin;
-    if (ch.back) { const backImg = await loadImage(ch.back); backSkin = new Skin(processImage(backImg).base); }
+    if (ch.back) { const backImg = await loadImage(ch.back); backSkin = new Skin((await maskImage(backImg)).base); }
     else { backSkin = new Skin(mask.base); }       // single sheet -> back mirrors the front
 
     const frontMat = new THREE.MeshBasicMaterial({ map: frontSkin.tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
@@ -462,6 +488,13 @@ document.querySelectorAll('[data-cam]').forEach(b => b.addEventListener('click',
 $('ynudge').addEventListener('input', (e) => { yNudge = +e.target.value; applyY(); });
 $('snap').addEventListener('click', () => { yNudge = 0; $('ynudge').value = 0; applyY(); });
 $('showbox').addEventListener('click', () => { boundsOn = !boundsOn; $('showbox').classList.toggle('active', boundsOn); rebuildBounds(); });
+
+// AI silhouette: cut the subject from any background, then re-extrude the current character
+$('aicut').addEventListener('click', () => {
+  aiSilhouette = !aiSilhouette;
+  $('aicut').classList.toggle('active', aiSilhouette);
+  if (lastCh) loadCharacter(lastCh);
+});
 
 // panel show/hide is handled by the shared glass shell (body[data-view] + tabs/joystick) in index.html
 

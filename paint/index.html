@@ -996,6 +996,7 @@ function buildTop() {
         <button class="gridbtn" id="f-export">${icon('download')}<span>Export</span></button>
       </div>
       <button class="gridbtn" id="f-assets" style="flex-direction:row;gap:8px;background:rgba(41,84,212,0.18);border:1px solid rgba(41,84,212,0.4)"><span style="font-size:18px">🖼️</span><span>Assets</span></button>
+      <button class="gridbtn" id="f-erasebg" style="flex-direction:row;gap:8px;background:rgba(91,139,245,0.16);border:1px solid rgba(91,139,245,0.4)"><span style="font-size:18px">✨</span><span>Erase Background</span></button>
       <div class="row" style="background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.05);border-radius:12px;padding:3px">
         <button id="r-clear" class="gridbtn" style="flex:1;flex-direction:row;gap:6px;background:transparent;border:none">${icon('trash')}<span>Clear</span></button>
         <div class="sep"></div>
@@ -1043,6 +1044,7 @@ function buildTop() {
   $('#f-new').onclick = () => openNewDialog();
   $('#f-open').onclick = () => $('#file-input').click();
   $('#f-assets').onclick = () => openAssets();
+  $('#f-erasebg').onclick = () => aiEraseBg();
   $('#f-save').onclick = () => saveProject();
   $('#f-export').onclick = () => exportPNG();
   $('#r-clear').onclick = () => { if (confirm('Clear all layers?')) { pushUndo(); for (const id of getOrder()) { const c = layerCanvases.get(id); c && c.getContext('2d').clearRect(0, 0, c.width, c.height); } setView('center'); } };
@@ -1404,6 +1406,29 @@ function addAsset(url, name) {
   };
   img.onerror = () => hud('Could not load that asset');
   img.src = url;
+}
+/* ---- AI background erase: matte the active layer in place (on-device, undoable) ---- */
+let aiBusy = false;
+async function aiEraseBg() {
+  if (aiBusy) return;
+  const aid = doc('activeLayerId'); const cv = layerCanvases.get(aid);
+  if (!cv) { hud('No active layer'); return; }
+  if (getLayer(aid)?.locked) { hud('Layer is locked'); return; }
+  const g = cv.getContext('2d');
+  const probe = g.getImageData(0, 0, cv.width, cv.height).data;
+  let hasPixels = false; for (let i = 3; i < probe.length; i += 4) { if (probe[i] > 8) { hasPixels = true; break; } }
+  if (!hasPixels) { hud('Active layer is empty — pick the image layer'); return; }
+  aiBusy = true; setView('center'); hud('Loading AI…');
+  try {
+    const { removeBackground } = await import('../assets/ml/segment.js');
+    const cut = await removeBackground(cv, (s) => hud(s));
+    pushUndo();
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.drawImage(cut, 0, 0, cv.width, cv.height);
+    reconcileLayers();
+    hud('Background erased ✨');
+  } catch (e) { console.error(e); hud('AI erase failed — ' + (e.message || e)); }
+  finally { aiBusy = false; }
 }
 function loadProject(proj) {
   Sys.vom.Unregister(P.layers); for (const id of [...layerCanvases.keys()]) { layerCanvases.get(id).remove(); layerCanvases.delete(id); }
