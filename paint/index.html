@@ -458,10 +458,34 @@ reg({ id: 'picker', name: 'Color Picker', type: 'system', cursor: 'crosshair',
   onPointerUp() {} });
 
 reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
-  _start: null, _snap: null,
-  onPointerDown(pt, c) { c.pushUndoState(); this._start = pt; this._snap = document.createElement('canvas'); this._snap.width = c.canvas.width; this._snap.height = c.canvas.height; this._snap.getContext('2d').drawImage(c.canvas, 0, 0); },
-  onPointerMove(pt, c) { if (!this._start || !this._snap) return; const dx = pt.x - this._start.x, dy = pt.y - this._start.y; const g = c.ctx; g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.canvas.width, c.canvas.height); g.drawImage(this._snap, dx, dy); g.restore(); },
-  onPointerUp() { this._start = null; this._snap = null; } });
+  _start: null, _float: null, _bg: null, _sel: null, _dx: 0, _dy: 0,
+  onPointerDown(pt, c) {
+    c.pushUndoState(); this._start = pt; this._dx = 0; this._dy = 0;
+    const W = c.canvas.width, H = c.canvas.height; const sel = doc('selection'); this._sel = sel;
+    c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
+    this._float = document.createElement('canvas'); this._float.width = W; this._float.height = H;
+    this._bg = document.createElement('canvas'); this._bg.width = W; this._bg.height = H;
+    if (sel) {                                          // move just the selected pixels
+      const mask = selectionToMask(sel, W, H);
+      const fg = this._float.getContext('2d'); fg.drawImage(c.canvas, 0, 0); fg.globalCompositeOperation = 'destination-in'; fg.drawImage(mask, 0, 0);
+      const bg = this._bg.getContext('2d'); bg.drawImage(c.canvas, 0, 0); bg.globalCompositeOperation = 'destination-out'; bg.drawImage(mask, 0, 0);
+    } else {                                            // no selection -> move the whole layer
+      this._float.getContext('2d').drawImage(c.canvas, 0, 0);
+    }
+  },
+  onPointerMove(pt, c) {
+    if (!this._start) return; this._dx = pt.x - this._start.x; this._dy = pt.y - this._start.y;
+    const g = c.ctx; g.save(); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.canvas.width, c.canvas.height);
+    g.drawImage(this._bg, 0, 0); g.drawImage(this._float, this._dx, this._dy); g.restore();
+  },
+  onPointerUp(pt, c) {
+    if (this._sel && (this._dx || this._dy)) {          // marching region follows the pixels
+      const W = c.canvas.width, H = c.canvas.height; const nm = document.createElement('canvas'); nm.width = W; nm.height = H;
+      nm.getContext('2d').drawImage(selectionToMask(this._sel, W, H), this._dx, this._dy);
+      publishSelMask(nm, c.canvas);
+    }
+    this._start = null; this._float = null; this._bg = null; this._sel = null;
+  } });
 
 (() => {
   let startPt = null, rect = null;
