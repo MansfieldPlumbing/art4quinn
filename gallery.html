@@ -49,6 +49,16 @@
   .tile .cut:active{ transform:scale(.9); }
   #count{color:var(--dim); font-size:.8rem; margin:0 auto 14px; max-width:1100px;}
   #err{color:#ff8a8a; font-size:.85rem; max-width:1100px; margin:10px auto;}
+
+  /* ---- Theme: follow the OS (automatic light/dark) ---- */
+  :root{ color-scheme:dark; }
+  @media (prefers-color-scheme: light){
+    :root{ color-scheme:light; --bg:#eef1f7; --text:#15151c; --dim:#5d6270; --border:#d3d7e0; }
+    body{ background: radial-gradient(130% 80% at 50% 0%, #ffffff 0%, #eef1f7 55%, #e6eaf2 100%); }
+    header{ background: linear-gradient(#eef1f7 70%, rgba(238,241,247,0)); }
+    a.back{ background:#fff; }
+    .tile{ background:#f4f6fb; }
+  }
 </style>
 </head>
 <body>

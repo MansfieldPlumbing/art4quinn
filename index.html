@@ -67,6 +67,19 @@
   footer{ margin-top:auto; padding-top:42px; color:var(--faint); font-size:.76rem; letter-spacing:.04em; text-align:center; }
   footer a{ color:var(--muted); text-decoration:none; border-bottom:1px solid var(--line2); padding-bottom:1px; }
   footer a:hover{ color:var(--paper); }
+
+  /* ---- Theme: follow the OS (automatic light/dark) ---- */
+  :root{ color-scheme:dark; }
+  @media (prefers-color-scheme: light){
+    :root{
+      color-scheme:light;
+      --ink:#f1eee7; --ink2:#e8e4db;     /* surfaces become paper */
+      --paper:#17171d;                    /* text becomes ink */
+      --muted:#6b6860; --faint:#8a877f;
+      --line:rgba(20,20,26,.12); --line2:rgba(20,20,26,.2);
+    }
+    body{ background: radial-gradient(120% 80% at 50% -10%, #ffffff 0%, var(--ink) 60%), var(--ink); }
+  }
 </style>
 </head>
 <body>
