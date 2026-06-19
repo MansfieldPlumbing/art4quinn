@@ -23,14 +23,26 @@ const MODEL = 'Xenova/slimsam-77-uniform';
 const MAX_IN = 1024;
 
 let _ready = null, _busy = false;
+let _forceWasm = (() => { try { return localStorage.getItem('a4q-ml-wasm') === '1'; } catch (_) { return false; } })();
 let _cacheKey = null, _emb = null, _embW = 0, _embH = 0, _scale = 1;
 
 export function selectorBusy() { return _busy; }
 
+function isGpuError(e) { return /webgpu|gpu|ortrun|bind ?group|validation|createbindgroup|shader|device lost/i.test(String((e && e.message) || e)); }
+async function withWasmFallback(run, onStatus) {
+  try { return await run(); }
+  catch (e) {
+    if (_forceWasm || !isGpuError(e)) throw e;
+    onStatus && onStatus('GPU not supported here — switching to compatibility mode…');
+    _forceWasm = true; try { localStorage.setItem('a4q-ml-wasm', '1'); } catch (_) {} await disposeSelector();
+    return await run();
+  }
+}
+
 async function ensure(onStatus) {
   if (_ready) return _ready;
   _ready = (async () => {
-    const device = (typeof navigator !== 'undefined' && navigator.gpu) ? 'webgpu' : 'wasm';
+    const device = (!_forceWasm && typeof navigator !== 'undefined' && navigator.gpu) ? 'webgpu' : 'wasm';
     onStatus && onStatus('loading magic wand…');
     const T = await import(/* @vite-ignore */ CDN);
     T.env.allowLocalModels = false;
@@ -82,7 +94,12 @@ export async function primeSelector(srcCanvas, key, onStatus) {
 export async function selectAt(srcCanvas, x, y, key, onStatus) {
   if (_busy) throw new Error('wand is busy');
   _busy = true;
-  try {
+  try { return await withWasmFallback(() => _selectInfer(srcCanvas, x, y, key, onStatus), onStatus); }
+  finally { _busy = false; }
+}
+
+async function _selectInfer(srcCanvas, x, y, key, onStatus) {
+  {
     const { T, model, processor } = await ensure(onStatus);
     await primeSelector(srcCanvas, key, onStatus);
     onStatus && onStatus('selecting…');
@@ -116,5 +133,5 @@ export async function selectAt(srcCanvas, x, y, key, onStatus) {
     const sx = out.width / W, sy = out.height / H;
     const bounds = any ? { x: minX * sx, y: minY * sy, w: Math.max(1, (maxX - minX + 1) * sx), h: Math.max(1, (maxY - minY + 1) * sy) } : null;
     return { mask: out, bounds, any };
-  } finally { _busy = false; }
+  }
 }

@@ -34,9 +34,23 @@ const MAX_OUT = 3072;   // cap the produced cut-out so phones don't OOM
 
 let _ready = null;      // memoised { T, model, processor, device }
 let _busy = false;      // single-job lock
+let _forceWasm = false; // set true after a WebGPU run failure (e.g. Adreno Softmax bug)
 
-export function mlDevice() { return (typeof navigator !== 'undefined' && navigator.gpu) ? 'webgpu' : 'wasm'; }
+export function mlDevice() { return (!_forceWasm && typeof navigator !== 'undefined' && navigator.gpu) ? 'webgpu' : 'wasm'; }
 export function mlBusy() { return _busy; }
+
+// Some mobile GPUs (e.g. Samsung Adreno) fail certain WebGPU ops at run time
+// ("CreateBindGroup Softmax", bind group validation). Detect that and retry on WASM.
+function isGpuError(e) { return /webgpu|gpu|ortrun|bind ?group|validation|createbindgroup|shader|device lost/i.test(String((e && e.message) || e)); }
+async function withWasmFallback(run, onStatus) {
+  try { return await run(); }
+  catch (e) {
+    if (_forceWasm || !isGpuError(e)) throw e;
+    onStatus && onStatus('GPU not supported here — switching to compatibility mode…');
+    _forceWasm = true; try { localStorage.setItem('a4q-ml-wasm', '1'); } catch (_) {} await disposeSegmenter();   // drop the WebGPU model, rebuild on WASM
+    return await run();
+  }
+}
 
 // Load (once) the library + model. onStatus(text) is called with progress lines.
 async function ensureModel(onStatus) {
@@ -93,23 +107,26 @@ function scaledCanvas(img, w, h, maxSide) {
   return c;
 }
 
+async function _maskInfer(src, onStatus) {
+  const { T, model, processor } = await ensureModel(onStatus);
+  const { img, w, h } = await loadDrawable(src);
+  const inCanvas = scaledCanvas(img, w, h, MAX_IN);      // never hold a full-res buffer
+  onStatus && onStatus('finding the subject…');
+  const blob = await new Promise((r) => inCanvas.toBlob(r, 'image/png'));
+  const image = await T.RawImage.read(blob);
+  const { pixel_values } = await processor(image);
+  const { output } = await model({ input: pixel_values });
+  const mask = await T.RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(inCanvas.width, inCanvas.height);
+  return { width: inCanvas.width, height: inCanvas.height, data: mask.data, img, origW: w, origH: h };
+}
+
 // Foreground matte at the (downscaled) working resolution. Returns
 // { width, height, data:Uint8Array(w*h) (subject alpha 0..255), img, origW, origH }.
 export async function foregroundMask(src, onStatus) {
   if (_busy) throw new Error('AI is busy — let the current job finish');
   _busy = true;
-  try {
-    const { T, model, processor } = await ensureModel(onStatus);
-    const { img, w, h } = await loadDrawable(src);
-    const inCanvas = scaledCanvas(img, w, h, MAX_IN);      // never hold a full-res buffer
-    onStatus && onStatus('finding the subject…');
-    const blob = await new Promise((r) => inCanvas.toBlob(r, 'image/png'));
-    const image = await T.RawImage.read(blob);
-    const { pixel_values } = await processor(image);
-    const { output } = await model({ input: pixel_values });
-    const mask = await T.RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(inCanvas.width, inCanvas.height);
-    return { width: inCanvas.width, height: inCanvas.height, data: mask.data, img, origW: w, origH: h };
-  } finally { _busy = false; }
+  try { return await withWasmFallback(() => _maskInfer(src, onStatus), onStatus); }
+  finally { _busy = false; }
 }
 
 // Background erase: returns a NEW canvas (subject kept, background transparent),

@@ -26,8 +26,20 @@ const SIZE = 512;     // LaMa fixed working size
 const PAD = 0.35;     // context padding around the hole bbox
 
 let _ready = null, _busy = false;
+let _forceWasm = (() => { try { return localStorage.getItem('a4q-ml-wasm') === '1'; } catch (_) { return false; } })();
 
 export function inpaintBusy() { return _busy; }
+
+function isGpuError(e) { return /webgpu|gpu|ortrun|bind ?group|validation|createbindgroup|shader|device lost/i.test(String((e && e.message) || e)); }
+async function withWasmFallback(run, onStatus) {
+  try { return await run(); }
+  catch (e) {
+    if (_forceWasm || !isGpuError(e)) throw e;
+    onStatus && onStatus('GPU not supported here — switching to compatibility mode…');
+    _forceWasm = true; try { localStorage.setItem('a4q-ml-wasm', '1'); } catch (_) {} await disposeInpainter();   // rebuild the ORT session on WASM
+    return await run();
+  }
+}
 
 async function fetchWithProgress(url, onStatus) {
   const res = await fetch(url);
@@ -51,7 +63,7 @@ async function ensure(onStatus) {
     onStatus && onStatus('loading magic eraser…');
     const ort = await import(/* @vite-ignore */ ORT);
     ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
-    const providers = (typeof navigator !== 'undefined' && navigator.gpu) ? ['webgpu', 'wasm'] : ['wasm'];
+    const providers = (!_forceWasm && typeof navigator !== 'undefined' && navigator.gpu) ? ['webgpu', 'wasm'] : ['wasm'];
     const buf = await fetchWithProgress(MODEL_URL, onStatus);   // cached by the browser HTTP cache
     onStatus && onStatus('warming up eraser…');
     const session = await ort.InferenceSession.create(buf, { executionProviders: providers });
@@ -85,7 +97,12 @@ function maskBounds(maskCanvas) {
 export async function inpaint(imageCanvas, maskCanvas, onStatus) {
   if (_busy) throw new Error('eraser is busy');
   _busy = true;
-  try {
+  try { return await withWasmFallback(() => _inpaintInfer(imageCanvas, maskCanvas, onStatus), onStatus); }
+  finally { _busy = false; }
+}
+
+async function _inpaintInfer(imageCanvas, maskCanvas, onStatus) {
+  {
     const { ort, session } = await ensure(onStatus);
     const crop = maskBounds(maskCanvas);
     if (!crop) throw new Error('nothing marked to erase');
@@ -144,5 +161,5 @@ export async function inpaint(imageCanvas, maskCanvas, onStatus) {
     rctx.drawImage(patch, crop.x, crop.y);
     onStatus && onStatus('erased ✨');
     return result2;
-  } finally { _busy = false; }
+  }
 }
