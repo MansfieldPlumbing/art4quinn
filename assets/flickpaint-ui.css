@@ -24,6 +24,8 @@
   --fg: #ffffff;
   --bg: #08080c;
   --panel: rgba(13, 14, 22, 0.45);
+  --dock: rgba(16, 17, 26, 0.94);        /* opaque docker surface (desktop) */
+  --dock-head: rgba(255,255,255,0.035);  /* docker title-bar tint */
   --indigo:   #2954d4;   /* primary cobalt accent */
   --indigo-2: #5b8bf5;   /* lighter blue highlight */
   --indigo-3: #1e3fa8;   /* deep pressed / hover */
@@ -124,15 +126,33 @@ body[data-view="left"]   .panel.left   { transform: none; }
 body[data-view="right"]  .panel.right  { transform: none; }
 body[data-view="bottom"] .panel.bottom { transform: none; }
 
-/* ===== Desktop / landscape: docked Photoshop-style layout (Tools left, Layers right, canvas between) ===== */
+/* ===== Desktop / landscape: docked "docker" layout (Tools left, Layers right, canvas between) ===== */
 @media (min-width: 900px) {
-  .panel.left, .panel.right { transform: none !important; top: 54px; bottom: 0; height: auto; max-width: none; border-radius: 0; padding: 16px 14px; }
+  /* Dockers are solid + flat on desktop — drop the floating phone-glass sheen. */
+  .panel.left, .panel.right, #top {
+    background-color: var(--dock);
+    background-image: none;
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    box-shadow: none;
+  }
+  .panel.left, .panel.right { transform: none !important; top: 54px; bottom: 0; height: auto; max-width: none; border-radius: 0; padding: 14px; overflow-y: auto; }
   .panel.left  { width: 248px; border-right: 1px solid var(--line); }
   .panel.right { width: 290px; border-left: 1px solid var(--line); }
   .tab.left, .tab.right { display: none; }           /* panels are docked, no edge grips */
   #stick { display: none !important; }               /* joystick is a touch affordance */
   #stage { transform: none !important; filter: none !important; }  /* no parallax/dim when docked */
-  #top { left: 248px; right: 290px; width: auto; max-width: none; transform: none; border-radius: 0; }
+
+  /* Top = a real docked toolbar that spans between the two dockers. */
+  #top { left: 248px; right: 290px; width: auto; max-width: none; transform: none; border-radius: 0; border-bottom: 1px solid var(--line); }
+  .deck { height: 54px; }
+
+  /* Docker section headers read as little title bars. */
+  .panel h2.title { margin: 2px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .panel h3.section { color: rgba(var(--fg-rgb), 0.42); }
+
+  /* The bottom adjustments dock slides up over the canvas but stays flat + docked-looking. */
+  .panel.bottom { background-color: var(--dock); background-image: none; box-shadow: 0 -12px 30px rgba(0,0,0,.45); }
 }
 
 /* ===== Top window blind ===== */
@@ -284,6 +304,8 @@ input:focus { border-color: rgba(var(--fg-rgb),0.3); }
     --fg: #12151d;
     --bg: #e8ecf3;
     --panel: rgba(255,255,255,0.52);
+    --dock: rgba(247,249,252,0.95);
+    --dock-head: rgba(0,0,0,0.03);
     --spray: radial-gradient(120% 140% at 20% -10%, rgba(41,84,212,0.10), transparent 55%);
   }
   :root:not([data-theme="dark"]) #hud { background: rgba(255,255,255,0.92); }
@@ -297,6 +319,8 @@ input:focus { border-color: rgba(var(--fg-rgb),0.3); }
   --fg: #12151d;
   --bg: #e8ecf3;
   --panel: rgba(255,255,255,0.52);
+  --dock: rgba(247,249,252,0.95);
+  --dock-head: rgba(0,0,0,0.03);
   --spray: radial-gradient(120% 140% at 20% -10%, rgba(41,84,212,0.10), transparent 55%);
 }
 :root[data-theme="light"] #hud { background: rgba(255,255,255,0.92); }
