@@ -90,7 +90,7 @@ export async function primeSelector(srcCanvas, key, onStatus) {
   _cacheKey = key; _emb = { emb, vision: inputs }; _scale = scale; _embW = canvas.width; _embH = canvas.height;
 }
 
-// Tap at (x,y) in srcCanvas pixels -> best object mask.
+// Tap at (x,y) in srcCanvas pixels -> best object mask (SAM point prompt).
 export async function selectAt(srcCanvas, x, y, key, onStatus) {
   if (_busy) throw new Error('wand is busy');
   _busy = true;
@@ -98,40 +98,54 @@ export async function selectAt(srcCanvas, x, y, key, onStatus) {
   finally { _busy = false; }
 }
 
+// Rough box {x0,y0,x1,y1} in srcCanvas pixels -> best object mask (SAM box prompt).
+// This is the Samsung-style "lasso roughly, snap to the object" path.
+export async function selectBox(srcCanvas, box, key, onStatus) {
+  if (_busy) throw new Error('wand is busy');
+  _busy = true;
+  try { return await withWasmFallback(() => _boxInfer(srcCanvas, box, key, onStatus), onStatus); }
+  finally { _busy = false; }
+}
+
 async function _selectInfer(srcCanvas, x, y, key, onStatus) {
-  {
-    const { T, model, processor } = await ensure(onStatus);
-    await primeSelector(srcCanvas, key, onStatus);
-    onStatus && onStatus('selecting…');
-    const px = x * _scale, py = y * _scale;
-    const input_points = new T.Tensor('float32', [px, py], [1, 1, 1, 2]);
-    const input_labels = new T.Tensor('int64', [1n], [1, 1, 1]);
-    const outputs = await model({ ..._emb.emb, input_points, input_labels });
-    const masks = await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes);
-    const scores = outputs.iou_scores.data;            // pick the highest-IoU proposal
-    let best = 0; for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
-    const m = masks[0];                                // Tensor [nMasks, H, W] (bool)
-    const H = m.dims[m.dims.length - 2], W = m.dims[m.dims.length - 1];
-    const data = m.data, off = best * H * W;
+  const { T, model, processor } = await ensure(onStatus);
+  await primeSelector(srcCanvas, key, onStatus);
+  onStatus && onStatus('selecting…');
+  const input_points = new T.Tensor('float32', [x * _scale, y * _scale], [1, 1, 1, 2]);
+  const input_labels = new T.Tensor('int64', [1n], [1, 1, 1]);
+  const outputs = await model({ ..._emb.emb, input_points, input_labels });
+  return _decode(srcCanvas, await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes), outputs.iou_scores.data);
+}
 
-    // mask canvas at the (downscaled) embed size, then scale up to srcCanvas
-    const mc = document.createElement('canvas'); mc.width = W; mc.height = H;
-    const mctx = mc.getContext('2d'); const id = mctx.createImageData(W, H);
-    let minX = W, minY = H, maxX = 0, maxY = 0, any = false;
-    for (let i = 0; i < W * H; i++) {
-      if (data[off + i]) {
-        id.data[i * 4 + 3] = 255; any = true;
-        const cx = i % W, cy = (i / W) | 0;
-        if (cx < minX) minX = cx; if (cx > maxX) maxX = cx; if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
-      }
+async function _boxInfer(srcCanvas, box, key, onStatus) {
+  const { T, model, processor } = await ensure(onStatus);
+  await primeSelector(srcCanvas, key, onStatus);
+  onStatus && onStatus('snapping to object…');
+  const input_boxes = new T.Tensor('float32', [box.x0 * _scale, box.y0 * _scale, box.x1 * _scale, box.y1 * _scale], [1, 1, 4]);
+  const outputs = await model({ ..._emb.emb, input_boxes });
+  return _decode(srcCanvas, await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes), outputs.iou_scores.data);
+}
+
+// pick the highest-IoU proposal -> a mask canvas the size of srcCanvas + bounds
+function _decode(srcCanvas, masks, scores) {
+  let best = 0; for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
+  const m = masks[0];                                // Tensor [nMasks, H, W] (bool)
+  const H = m.dims[m.dims.length - 2], W = m.dims[m.dims.length - 1];
+  const data = m.data, off = best * H * W;
+  const mc = document.createElement('canvas'); mc.width = W; mc.height = H;
+  const mctx = mc.getContext('2d'); const id = mctx.createImageData(W, H);
+  let minX = W, minY = H, maxX = 0, maxY = 0, any = false;
+  for (let i = 0; i < W * H; i++) {
+    if (data[off + i]) {
+      id.data[i * 4 + 3] = 255; any = true;
+      const cx = i % W, cy = (i / W) | 0;
+      if (cx < minX) minX = cx; if (cx > maxX) maxX = cx; if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
     }
-    mctx.putImageData(id, 0, 0);
-
-    const out = document.createElement('canvas'); out.width = srcCanvas.width; out.height = srcCanvas.height;
-    const octx = out.getContext('2d'); octx.imageSmoothingEnabled = false;
-    octx.drawImage(mc, 0, 0, out.width, out.height);
-    const sx = out.width / W, sy = out.height / H;
-    const bounds = any ? { x: minX * sx, y: minY * sy, w: Math.max(1, (maxX - minX + 1) * sx), h: Math.max(1, (maxY - minY + 1) * sy) } : null;
-    return { mask: out, bounds, any };
   }
+  mctx.putImageData(id, 0, 0);
+  const out = document.createElement('canvas'); out.width = srcCanvas.width; out.height = srcCanvas.height;
+  const octx = out.getContext('2d'); octx.imageSmoothingEnabled = false; octx.drawImage(mc, 0, 0, out.width, out.height);
+  const sx = out.width / W, sy = out.height / H;
+  const bounds = any ? { x: minX * sx, y: minY * sy, w: Math.max(1, (maxX - minX + 1) * sx), h: Math.max(1, (maxY - minY + 1) * sy) } : null;
+  return { mask: out, bounds, any };
 }
