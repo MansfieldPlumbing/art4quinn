@@ -541,29 +541,19 @@ reg({ id: 'airefine', name: 'AI Select', type: 'select', cursor: 'crosshair',
     else if ((aiMode === 'add' || aiMode === 'remove') && _stroke) { publishSelMask(_stroke, c.canvas); _stroke = null; }
   } });
 
+// Crop = resize the document to the drawn rect. Drag a box (it can be BIGGER than the
+// image, even starting off the artboard) and release: the canvas becomes that box, art is
+// kept, new area is transparent. The dashed frame shows outside the artboard via a DOM div.
 (() => {
-  let startPt = null, cropRect = null;
+  let startPt = null, rect = null;
   reg({ id: 'crop', name: 'Crop', type: 'select', cursor: 'crosshair',
-    onPointerDown(pt, c) {
-      if (cropRect) {
-        const inside = pt.x >= cropRect.x && pt.x <= cropRect.x + cropRect.w && pt.y >= cropRect.y && pt.y <= cropRect.y + cropRect.h;
-        if (inside && cropRect.w > 10 && cropRect.h > 10) {
-          c.pushUndoState();
-          const rx = Math.round(cropRect.x), ry = Math.round(cropRect.y), rw = Math.round(cropRect.w), rh = Math.round(cropRect.h);
-          try { const img = c.ctx.getImageData(rx, ry, rw, rh); c.ctx.clearRect(0, 0, c.canvas.width, c.canvas.height); c.ctx.putImageData(img, rx, ry); } catch (e) {}
-          c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); cropRect = null; startPt = null; return;
-        }
-      }
-      startPt = pt; cropRect = null; c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
+    onPointerDown(pt) { startPt = pt; rect = null; },
+    onPointerMove(pt) {
+      if (!startPt) return;
+      rect = { x: Math.min(startPt.x, pt.x), y: Math.min(startPt.y, pt.y), w: Math.abs(pt.x - startPt.x), h: Math.abs(pt.y - startPt.y) };
+      showCropFrame(rect);
     },
-    onPointerMove(pt, c) {
-      if (!startPt || !c.overlayCtx) return; const o = c.overlayCtx; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
-      const x = Math.min(startPt.x, pt.x), y = Math.min(startPt.y, pt.y), w = Math.abs(startPt.x - pt.x), h = Math.abs(startPt.y - pt.y); cropRect = { x, y, w, h };
-      o.save(); o.fillStyle = 'rgba(0,0,0,0.65)'; o.fillRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
-      o.globalCompositeOperation = 'destination-out'; o.fillRect(x, y, w, h); o.globalCompositeOperation = 'source-over';
-      o.strokeStyle = '#fff'; o.lineWidth = 2; o.strokeRect(x, y, w, h); o.restore();
-    },
-    onPointerUp() { startPt = null; } });
+    onPointerUp() { hideCropFrame(); if (rect && rect.w > 8 && rect.h > 8) cropTo(rect); startPt = null; rect = null; } });
 })();
 
 /* Retouch tools — per-pixel; 1:1 coordinate space (no *2). */
@@ -737,8 +727,10 @@ function initEngine() {
     vp.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 1) {
-      const pt = canvasPoint(e); const inside = pt.x >= 0 && pt.x <= doc('width') && pt.y >= 0 && pt.y <= doc('height');
-      const wantPan = session('tool') === 'hand' || e.button === 1 || e.button === 2 || spaceDown || !inside;   // Pan tool, right/middle click, or space = drag to pan
+      const pt = canvasPoint(e);
+      // Left-click always drives the active tool (even outside the artboard — needed for an
+      // oversized crop). Pan is middle/right-drag, space-drag, or the Hand tool.
+      const wantPan = session('tool') === 'hand' || e.button === 1 || e.button === 2 || spaceDown;
       if (wantPan) { panning = true; drawing = false; dragStart = { ex: e.clientX, ey: e.clientY, tx: view.x, ty: view.y }; }
       else { panning = false; drawing = true; const c = toolCtx(); const t = Tools[session('tool')]; if (c && t && t.onPointerDown) t.onPointerDown(pt, c); }
     } else if (pointers.size === 2) {
@@ -789,15 +781,29 @@ function initEngine() {
     const ns = Math.max(0.05, Math.min(10, cur * f)); view.x = mx - (mx - view.x) * (ns / cur); view.y = my - (my - view.y) * (ns / cur); view.scale = ns; applyWorld();
   }, { passive: false });
 
+  // tool hotkeys (single keys) + editing shortcuts
+  const TOOLKEY = { b: 'brush', e: 'eraser', g: 'fill', u: 'gradient', i: 'picker', v: 'move', m: 'select', l: 'lasso', w: 'magic', a: 'airefine', c: 'crop', t: 'text', s: 'smudge', h: 'hand', k: 'blur' };
   addEventListener('keydown', (e) => {
     const a = document.activeElement; if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
-    if (e.code === 'Space') { e.preventDefault(); spaceDown = true; vp.style.cursor = 'grab'; }
+    if (e.code === 'Space') { e.preventDefault(); spaceDown = true; vp.style.cursor = 'grab'; return; }
     const mod = e.ctrlKey || e.metaKey;
-    if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); History.undo(); }
-    else if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); History.redo(); }
-    else if (mod && e.key.toLowerCase() === 'c') { e.preventDefault(); doCopy(); }
-    else if (mod && e.key.toLowerCase() === 'v') { e.preventDefault(); doPaste(); }
-    else if (mod && e.key.toLowerCase() === 'x') { e.preventDefault(); doCut(); }
+    if (mod) {
+      const k = e.key.toLowerCase();
+      if (k === 'z') { e.preventDefault(); e.shiftKey ? History.redo() : History.undo(); }
+      else if (k === 'y') { e.preventDefault(); History.redo(); }
+      else if (k === 'c') { e.preventDefault(); doCopy(); }
+      else if (k === 'v') { e.preventDefault(); doPaste(); }
+      else if (k === 'x') { e.preventDefault(); doCut(); }
+      else if (k === 'a') { e.preventDefault(); selectAll(); }
+      else if (k === 'd') { e.preventDefault(); deselect(); }
+      return;
+    }
+    if (e.key === 'Escape') { deselect(); return; }
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelection(); return; }
+    if (e.key === '[') { setSession('brushSize', Math.max(1, session('brushSize') - 2)); return; }
+    if (e.key === ']') { setSession('brushSize', Math.min(200, session('brushSize') + 2)); return; }
+    const t = TOOLKEY[e.key.toLowerCase()];
+    if (t && Tools[t]) { setSession('tool', t); hud(Tools[t].name); }
   });
   addEventListener('keyup', (e) => { if (e.code === 'Space') { spaceDown = false; refreshCursor(); } });
 
@@ -1687,6 +1693,41 @@ function workArea() {
   return { x: 0, y: 0, w: innerWidth, h: innerHeight };
 }
 function recenter() { const a = workArea(); const W = doc('width'), H = doc('height'); const s = Math.min((a.w * 0.9) / W, (a.h * 0.85) / H); view = { x: a.x + (a.w - W * s) / 2, y: a.y + (a.h - H * s) / 2, scale: s, rotate: 0 }; applyWorld(); }
+/* ---- Crop = document resize (expand-capable); a DOM frame shows outside the artboard ---- */
+let _cropFrame = null;
+function showCropFrame(rect) {
+  if (!_cropFrame) {
+    _cropFrame = document.createElement('div');
+    _cropFrame.style.cssText = 'position:absolute;pointer-events:none;border:2px dashed #fff;box-shadow:0 0 0 9999px rgba(0,0,0,0.45);z-index:6;display:none';
+    $('#world').appendChild(_cropFrame);
+  }
+  _cropFrame.style.display = 'block';
+  _cropFrame.style.left = rect.x + 'px'; _cropFrame.style.top = rect.y + 'px';
+  _cropFrame.style.width = rect.w + 'px'; _cropFrame.style.height = rect.h + 'px';
+}
+function hideCropFrame() { if (_cropFrame) _cropFrame.style.display = 'none'; }
+function cropTo(rect) {
+  const rx = Math.round(rect.x), ry = Math.round(rect.y);
+  const rw = Math.max(1, Math.round(rect.w)), rh = Math.max(1, Math.round(rect.h));
+  const backups = getOrder().map((id) => { const cv = layerCanvases.get(id); const b = document.createElement('canvas'); b.width = cv.width; b.height = cv.height; b.getContext('2d').drawImage(cv, 0, 0); return { id, b }; });
+  Sys.vom.Set(P.doc, 'width', rw); Sys.vom.Set(P.doc, 'height', rh);
+  for (const { id } of backups) { const cv = layerCanvases.get(id); cv.width = rw; cv.height = rh; }
+  reconcileLayers();
+  backups.forEach(({ id, b }) => { const cv = layerCanvases.get(id); cv.getContext('2d').drawImage(b, -rx, -ry); });   // shift content; outside is clipped, new area transparent
+  setSelection(null);
+  History.push(); recenter(); setView('center'); hud('Canvas ' + rw + ' × ' + rh);
+}
+
+/* ---- selection shortcuts ---- */
+function selectAll() { const W = doc('width'), H = doc('height'); if (!W) return; pushUndo(); setSelection({ type: 'rect', bounds: { x: 0, y: 0, w: W, h: H } }); hud('Selected all'); }
+function deselect() { if (doc('selection')) { pushUndo(); setSelection(null); } }
+function deleteSelection() {
+  const aid = doc('activeLayerId'); const cv = layerCanvases.get(aid); const sel = doc('selection');
+  if (!cv || !sel || getLayer(aid)?.locked) return;
+  pushUndo(); const mask = selectionToMask(sel, cv.width, cv.height); if (!mask) return;
+  const g = cv.getContext('2d'); g.save(); g.globalCompositeOperation = 'destination-out'; g.drawImage(mask, 0, 0); g.restore();
+}
+
 function applyResize(nw, nh) {
   if (!(nw > 0 && nh > 0)) return; const backups = getOrder().map((id) => { const cv = layerCanvases.get(id); const b = document.createElement('canvas'); b.width = cv.width; b.height = cv.height; b.getContext('2d').drawImage(cv, 0, 0); return { id, b }; });
   Sys.vom.Set(P.doc, 'width', nw); Sys.vom.Set(P.doc, 'height', nh);

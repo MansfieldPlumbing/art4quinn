@@ -121,8 +121,11 @@ async function _boxInfer(srcCanvas, box, key, onStatus) {
   const { T, model, processor } = await ensure(onStatus);
   await primeSelector(srcCanvas, key, onStatus);
   onStatus && onStatus('snapping to object…');
-  const input_boxes = new T.Tensor('float32', [box.x0 * _scale, box.y0 * _scale, box.x1 * _scale, box.y1 * _scale], [1, 1, 4]);
-  const outputs = await model({ ..._emb.emb, input_boxes });
+  // SAM encodes a box as two points with labels 2 (top-left) and 3 (bottom-right).
+  // This reuses the same input_points path the tap prompt uses (more portable than input_boxes).
+  const input_points = new T.Tensor('float32', [box.x0 * _scale, box.y0 * _scale, box.x1 * _scale, box.y1 * _scale], [1, 1, 2, 2]);
+  const input_labels = new T.Tensor('int64', [2n, 3n], [1, 1, 2]);
+  const outputs = await model({ ..._emb.emb, input_points, input_labels });
   return _decode(srcCanvas, await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes), outputs.iou_scores.data);
 }
 
