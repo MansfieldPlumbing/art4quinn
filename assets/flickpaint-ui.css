@@ -126,33 +126,16 @@ body[data-view="left"]   .panel.left   { transform: none; }
 body[data-view="right"]  .panel.right  { transform: none; }
 body[data-view="bottom"] .panel.bottom { transform: none; }
 
-/* ===== Desktop / landscape: docked "docker" layout (Tools left, Layers right, canvas between) ===== */
+/* ===== Desktop / landscape: docked layout — keep the mica glass, just dock it ===== */
 @media (min-width: 900px) {
-  /* Dockers are solid + flat on desktop — drop the floating phone-glass sheen. */
-  .panel.left, .panel.right, #top {
-    background-color: var(--dock);
-    background-image: none;
-    backdrop-filter: blur(18px) saturate(140%);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
-    box-shadow: none;
-  }
-  .panel.left, .panel.right { transform: none !important; top: 54px; bottom: 0; height: auto; max-width: none; border-radius: 0; padding: 14px; overflow-y: auto; }
+  .panel.left, .panel.right { transform: none !important; top: 54px; bottom: 0; height: auto; max-width: none; border-radius: 0; padding: 16px 14px; overflow-y: auto; }
   .panel.left  { width: 248px; border-right: 1px solid var(--line); }
   .panel.right { width: 290px; border-left: 1px solid var(--line); }
   .tab.left, .tab.right { display: none; }           /* panels are docked, no edge grips */
   #stick { display: none !important; }               /* joystick is a touch affordance */
   #stage { transform: none !important; filter: none !important; }  /* no parallax/dim when docked */
-
-  /* Top = a real docked toolbar that spans between the two dockers. */
   #top { left: 248px; right: 290px; width: auto; max-width: none; transform: none; border-radius: 0; border-bottom: 1px solid var(--line); }
-  .deck { height: 54px; }
-
-  /* Docker section headers read as little title bars. */
-  .panel h2.title { margin: 2px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-  .panel h3.section { color: rgba(var(--fg-rgb), 0.42); }
-
-  /* The bottom adjustments dock slides up over the canvas but stays flat + docked-looking. */
-  .panel.bottom { background-color: var(--dock); background-image: none; box-shadow: 0 -12px 30px rgba(0,0,0,.45); }
+  .panel h2.title { margin: 2px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }   /* docker title bar */
 }
 
 /* ===== Top window blind ===== */
