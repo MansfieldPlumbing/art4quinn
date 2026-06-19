@@ -1,29 +1,30 @@
 // assets/ml/inpaint.js
 // ---------------------------------------------------------------------------
-// Magic Eraser — content-aware fill (object removal). Brush/select a region,
-// and LaMa repaints it from the surroundings (true inpainting, not just a
-// transparent cut-out).
+// Magic Eraser — content-aware fill (object removal), powered by MI-GAN.
 //
-// LaMa (big-lama) converted to ONNX (Carve/LaMa-ONNX), run with onnxruntime-web
-// (WebGPU, WASM fallback). The model is ~200MB and runs at a fixed 512x512, so
-// we inpaint only a PADDED CROP around the hole: tiny tensors, full-res
-// preserved everywhere outside the hole, and the masked pixels composited back.
+// LaMa was ~200MB and slow/soft. MI-GAN (Picsart, ICCV-2023) is built for
+// mobile: ~29MB, an order of magnitude faster, and it ships as a *pipeline*
+// ONNX that takes a raw uint8 image + mask and does the crop-around-mask,
+// resize-to-512, normalize, run, and blend-back internally — so we just hand
+// it the picture and the mask and get the finished image back.
 //
-// ⚠ NEEDS ON-DEVICE VERIFICATION: the exact ONNX input/output names and value
-// range aren't contractually fixed across exports. This module maps I/O by name
-// (falling back to order) and auto-detects whether the output is [0,1] or
-// [0,255]. If a future model differs, those two spots are where to look.
+// Runs on WebGPU (Dawn) first for speed, WASM fallback, in a proxy Worker so the
+// UI never hangs.
+//
+//   model input  : "image" uint8 RGB,  "mask" uint8 gray (255 = keep, 0 = erase)
+//   model output : uint8 RGB, full image already blended
+// Tensor SHAPES aren't documented, so we read the names at runtime and try
+// NHWC then NCHW (both in and out are auto-detected from dims).
 //
 // API:  const patched = await inpaint(imageCanvas, maskCanvas, onStatus)
-//        imageCanvas = the picture; maskCanvas = white/opaque where to erase.
-//        returns a NEW canvas (same size as imageCanvas) with the hole filled.
+//        maskCanvas = white/opaque where to erase. Returns a NEW canvas.
 // ---------------------------------------------------------------------------
 
 const ORT_VER = '1.20.1';
 const ORT = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/ort.webgpu.bundle.min.mjs`;
-const MODEL_URL = 'https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx';
-const SIZE = 512;     // LaMa fixed working size
-const PAD = 0.35;     // context padding around the hole bbox
+const MODEL_URL = 'https://huggingface.co/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx';
+const MAX_IN = 2048;   // cap the input we hand the pipeline (it resizes internally anyway)
+const PAD = 0.012;     // dilate the mask by ~1.2% so we catch the object's edge/halo
 
 let _ready = null, _busy = false;
 let _forceWasm = (() => { try { return localStorage.getItem('a4q-ml-wasm') === '1'; } catch (_) { return false; } })();
@@ -36,7 +37,7 @@ async function withWasmFallback(run, onStatus) {
   catch (e) {
     if (_forceWasm || !isGpuError(e)) throw e;
     onStatus && onStatus('GPU not supported here — switching to compatibility mode…');
-    _forceWasm = true; try { localStorage.setItem('a4q-ml-wasm', '1'); } catch (_) {} await disposeInpainter();   // rebuild the ORT session on WASM
+    _forceWasm = true; try { localStorage.setItem('a4q-ml-wasm', '1'); } catch (_) {} await disposeInpainter();
     return await run();
   }
 }
@@ -65,18 +66,12 @@ async function ensure(onStatus) {
     ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
     ort.env.wasm.simd = true;
     const providers = (!_forceWasm && typeof navigator !== 'undefined' && navigator.gpu) ? ['webgpu', 'wasm'] : ['wasm'];
-    const buf = await fetchWithProgress(MODEL_URL, onStatus);   // cached by the browser HTTP cache
+    const buf = await fetchWithProgress(MODEL_URL, onStatus);
     onStatus && onStatus('warming up eraser…');
     const opts = { executionProviders: providers };
     let session;
-    try {
-      ort.env.wasm.proxy = true;                                // run inference in a Worker -> no UI hang
-      session = await ort.InferenceSession.create(buf, opts);
-    } catch (e) {                                               // some builds can't proxy -> fall back to main thread
-      ort.env.wasm.proxy = false;
-      const buf2 = await fetchWithProgress(MODEL_URL);          // served from cache, fast
-      session = await ort.InferenceSession.create(buf2, opts);
-    }
+    try { ort.env.wasm.proxy = true; session = await ort.InferenceSession.create(buf, opts); }   // off-main-thread
+    catch (e) { ort.env.wasm.proxy = false; const b2 = await fetchWithProgress(MODEL_URL); session = await ort.InferenceSession.create(b2, opts); }
     return { ort, session };
   })().catch((e) => { _ready = null; throw e; });
   return _ready;
@@ -88,32 +83,27 @@ export async function disposeInpainter() {
   _ready = null;
 }
 
-// Grow the mask by ~r px (blur + threshold). Erasers must over-cover: a tight
-// mask leaves the object's halo/shadow behind, so we pad before inpainting.
+// Grow the mask by ~r px so the erase covers the object's edge/halo.
 function dilateMask(mask, r) {
   if (r <= 0) return mask;
   const c = document.createElement('canvas'); c.width = mask.width; c.height = mask.height;
   const g = c.getContext('2d');
   g.filter = `blur(${r}px)`; g.drawImage(mask, 0, 0); g.filter = 'none';
   const id = g.getImageData(0, 0, c.width, c.height), d = id.data;
-  for (let i = 3; i < d.length; i += 4) d[i] = d[i] > 8 ? 255 : 0;   // threshold the feather back to solid
+  for (let i = 3; i < d.length; i += 4) d[i] = d[i] > 8 ? 255 : 0;
   g.putImageData(id, 0, 0); return c;
 }
 
-// padded, clamped integer crop rect around the mask's opaque bbox
-function maskBounds(maskCanvas) {
-  const W = maskCanvas.width, H = maskCanvas.height;
-  const d = maskCanvas.getContext('2d').getImageData(0, 0, W, H).data;
-  let minX = W, minY = H, maxX = -1, maxY = -1;
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    if (d[(y * W + x) * 4 + 3] > 16) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
-  }
-  if (maxX < 0) return null;
-  const bw = maxX - minX + 1, bh = maxY - minY + 1;
-  const px = bw * PAD, py = bh * PAD;
-  const x0 = Math.max(0, Math.floor(minX - px)), y0 = Math.max(0, Math.floor(minY - py));
-  const x1 = Math.min(W, Math.ceil(maxX + 1 + px)), y1 = Math.min(H, Math.ceil(maxY + 1 + py));
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+function imageTensor(ort, rgba, w, h, nchw) {
+  const N = w * h;
+  if (nchw) { const t = new Uint8Array(3 * N); for (let i = 0; i < N; i++) { t[i] = rgba[i * 4]; t[N + i] = rgba[i * 4 + 1]; t[2 * N + i] = rgba[i * 4 + 2]; } return new ort.Tensor('uint8', t, [1, 3, h, w]); }
+  const t = new Uint8Array(N * 3); for (let i = 0; i < N; i++) { t[i * 3] = rgba[i * 4]; t[i * 3 + 1] = rgba[i * 4 + 1]; t[i * 3 + 2] = rgba[i * 4 + 2]; }
+  return new ort.Tensor('uint8', t, [1, h, w, 3]);
+}
+function maskTensor(ort, mrgba, w, h, nchw) {
+  const N = w * h, t = new Uint8Array(N);
+  for (let i = 0; i < N; i++) t[i] = mrgba[i * 4 + 3] > 16 ? 0 : 255;   // selection(opaque) -> erase -> 0; else keep -> 255
+  return new ort.Tensor('uint8', t, nchw ? [1, 1, h, w] : [1, h, w, 1]);
 }
 
 export async function inpaint(imageCanvas, maskCanvas, onStatus) {
@@ -124,66 +114,54 @@ export async function inpaint(imageCanvas, maskCanvas, onStatus) {
 }
 
 async function _inpaintInfer(imageCanvas, maskCanvas, onStatus) {
-  {
-    const { ort, session } = await ensure(onStatus);
-    const pad = Math.max(3, Math.min(28, Math.round(Math.max(imageCanvas.width, imageCanvas.height) * 0.012)));
-    maskCanvas = dilateMask(maskCanvas, pad);                   // pad so we catch the object's edges/halo
-    const crop = maskBounds(maskCanvas);
-    if (!crop) throw new Error('nothing marked to erase');
-    onStatus && onStatus('erasing…');
+  const { ort, session } = await ensure(onStatus);
+  onStatus && onStatus('erasing…');
 
-    // 512x512 crops of the image + mask
-    const ic = document.createElement('canvas'); ic.width = SIZE; ic.height = SIZE;
-    ic.getContext('2d').drawImage(imageCanvas, crop.x, crop.y, crop.w, crop.h, 0, 0, SIZE, SIZE);
-    const mc = document.createElement('canvas'); mc.width = SIZE; mc.height = SIZE;
-    mc.getContext('2d').drawImage(maskCanvas, crop.x, crop.y, crop.w, crop.h, 0, 0, SIZE, SIZE);
+  const pad = Math.max(3, Math.min(28, Math.round(Math.max(imageCanvas.width, imageCanvas.height) * PAD)));
+  const mask = dilateMask(maskCanvas, pad);
 
-    const img = ic.getContext('2d').getImageData(0, 0, SIZE, SIZE).data;
-    const msk = mc.getContext('2d').getImageData(0, 0, SIZE, SIZE).data;
-    const HW = SIZE * SIZE;
-    const imgT = new Float32Array(3 * HW), mskT = new Float32Array(HW);
-    for (let i = 0; i < HW; i++) {
-      imgT[i] = img[i * 4] / 255;             // CHW, channel-major
-      imgT[HW + i] = img[i * 4 + 1] / 255;
-      imgT[2 * HW + i] = img[i * 4 + 2] / 255;
-      mskT[i] = msk[i * 4 + 3] > 16 ? 1 : 0;  // 1 = hole
+  const scale = Math.min(1, MAX_IN / Math.max(imageCanvas.width, imageCanvas.height));
+  const w = Math.max(1, Math.round(imageCanvas.width * scale)), h = Math.max(1, Math.round(imageCanvas.height * scale));
+  const ic = document.createElement('canvas'); ic.width = w; ic.height = h; ic.getContext('2d').drawImage(imageCanvas, 0, 0, w, h);
+  const mc = document.createElement('canvas'); mc.width = w; mc.height = h; mc.getContext('2d').drawImage(mask, 0, 0, w, h);
+  const rgba = ic.getContext('2d').getImageData(0, 0, w, h).data;
+  const mrgba = mc.getContext('2d').getImageData(0, 0, w, h).data;
+
+  const names = session.inputNames;
+  const inImg = names.find((n) => /image|img|input/i.test(n)) || names[0];
+  const inMask = names.find((n) => /mask/i.test(n)) || names[1];
+
+  // run, trying NHWC then NCHW (shapes aren't documented)
+  let out = null;
+  for (const nchw of [false, true]) {
+    try {
+      const feeds = {}; feeds[inImg] = imageTensor(ort, rgba, w, h, nchw); feeds[inMask] = maskTensor(ort, mrgba, w, h, nchw);
+      const r = await session.run(feeds); out = r[session.outputNames[0]]; break;
+    } catch (e) {
+      if (isGpuError(e)) throw e;                                  // let the WASM fallback handle GPU errors
+      if (nchw) throw e;                                           // both layouts failed
     }
-
-    const names = session.inputNames;
-    const imageName = names.find((n) => /image|input/i.test(n)) || names[0];
-    const maskName = names.find((n) => /mask/i.test(n)) || names[1];
-    const feeds = {};
-    feeds[imageName] = new ort.Tensor('float32', imgT, [1, 3, SIZE, SIZE]);
-    feeds[maskName] = new ort.Tensor('float32', mskT, [1, 1, SIZE, SIZE]);
-    const result = await session.run(feeds);
-    const out = result[session.outputNames[0]].data;
-
-    // auto-detect range: [0,1] vs [0,255]
-    let mx = 0; for (let i = 0; i < out.length; i += 997) if (out[i] > mx) mx = out[i];
-    const scale = mx <= 1.5 ? 255 : 1;
-
-    const oc = document.createElement('canvas'); oc.width = SIZE; oc.height = SIZE;
-    const octx = oc.getContext('2d'); const oid = octx.createImageData(SIZE, SIZE);
-    for (let i = 0; i < HW; i++) {
-      oid.data[i * 4] = Math.max(0, Math.min(255, out[i] * scale));
-      oid.data[i * 4 + 1] = Math.max(0, Math.min(255, out[HW + i] * scale));
-      oid.data[i * 4 + 2] = Math.max(0, Math.min(255, out[2 * HW + i] * scale));
-      oid.data[i * 4 + 3] = 255;
-    }
-    octx.putImageData(oid, 0, 0);
-
-    // patch = inpainted crop, masked so ONLY the hole is replaced (soft edge)
-    const patch = document.createElement('canvas'); patch.width = crop.w; patch.height = crop.h;
-    const pctx = patch.getContext('2d'); pctx.imageSmoothingQuality = 'high';
-    pctx.drawImage(oc, 0, 0, crop.w, crop.h);
-    pctx.globalCompositeOperation = 'destination-in';
-    pctx.drawImage(maskCanvas, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
-
-    const result2 = document.createElement('canvas'); result2.width = imageCanvas.width; result2.height = imageCanvas.height;
-    const rctx = result2.getContext('2d');
-    rctx.drawImage(imageCanvas, 0, 0);
-    rctx.drawImage(patch, crop.x, crop.y);
-    onStatus && onStatus('erased ✨');
-    return result2;
   }
+
+  // decode output (auto-detect layout from dims)
+  const d = out.data, dims = out.dims;
+  let ow, oh, nchwOut;
+  if (dims.length === 4) { if (dims[3] === 3) { oh = dims[1]; ow = dims[2]; nchwOut = false; } else { oh = dims[2]; ow = dims[3]; nchwOut = true; } }
+  else { if (dims[dims.length - 1] === 3) { oh = dims[0]; ow = dims[1]; nchwOut = false; } else { oh = dims[1]; ow = dims[2]; nchwOut = true; } }
+  const N = ow * oh;
+  const oc = document.createElement('canvas'); oc.width = ow; oc.height = oh;
+  const oid = oc.getContext('2d').createImageData(ow, oh);
+  const f = d instanceof Float32Array ? 255 : 1;                  // handle the rare float export
+  for (let i = 0; i < N; i++) {
+    if (nchwOut) { oid.data[i*4] = d[i]*f; oid.data[i*4+1] = d[N+i]*f; oid.data[i*4+2] = d[2*N+i]*f; }
+    else { oid.data[i*4] = d[i*3]*f; oid.data[i*4+1] = d[i*3+1]*f; oid.data[i*4+2] = d[i*3+2]*f; }
+    oid.data[i*4+3] = 255;
+  }
+  oc.getContext('2d').putImageData(oid, 0, 0);
+
+  // back to the original size
+  const result = document.createElement('canvas'); result.width = imageCanvas.width; result.height = imageCanvas.height;
+  const rctx = result.getContext('2d'); rctx.imageSmoothingQuality = 'high'; rctx.drawImage(oc, 0, 0, result.width, result.height);
+  onStatus && onStatus('erased ✨');
+  return result;
 }
