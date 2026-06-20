@@ -23,7 +23,7 @@
 const ORT_VER = '1.20.1';
 const ORT = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/ort.webgpu.bundle.min.mjs`;
 const MODEL_URL = 'https://huggingface.co/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx';
-const MAX_IN = 2048;   // cap the input we hand the pipeline (it resizes internally anyway)
+const SIZE = 512;      // MI-GAN pipeline runs at a FIXED 512x512
 const PAD = 0.012;     // dilate the mask by ~1.2% so we catch the object's edge/halo
 
 let _ready = null, _busy = false;
