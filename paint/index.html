@@ -520,96 +520,22 @@ reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
     },
     onPointerUp(pt, c) {
       if (pts.length < 3) { pts = []; renderSelection(); return; }
-      const p = pts; pts = []; aiLassoCommit(p, c);   // unified: snaps if AI snap is on, raw outline otherwise
+      const m = blankSelMask(c.canvas, false); drawLassoInto(m, pts, c); pts = [];   // plain Lasso = manual freehand
+      compositeSel(m, selMode(), c.canvas);
     } });
 })();
 
-// flatten the visible layers to a working-res canvas (for edge detection)
-function compositeCanvas(maxSide) {
-  const W = doc('width'), H = doc('height'); const s = Math.min(1, (maxSide || W) / Math.max(W, H));
-  const w = Math.max(1, Math.round(W * s)), h = Math.max(1, Math.round(H * s));
-  const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d');
-  [...getLayers()].reverse().forEach((l) => { if (!l.visible) return; const cv = layerCanvases.get(l.id); if (!cv) return; g.globalAlpha = l.opacity / 100; const b = blendCss(l.blendMode); g.globalCompositeOperation = b === 'normal' ? 'source-over' : b; g.drawImage(cv, 0, 0, w, h); });
-  g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
-  return { canvas: c, scale: s };
-}
-
-/* ---- Magnetic Lasso (Intelligent Scissors / live-wire): the path clings to edges ---- */
+/* ---- Magnetic / Object Lasso: roughly circle an object and AI snaps to it (Samsung-style) ---- */
 (() => {
-  let W = 0, H = 0, scale = 1, cost = null, dist = null, par = null;
-  let path = [], live = [], seed = -1, active = false;
-  const STEP = 34, SNAP_R = 4, WIN = 170;
-
-  function buildField() {
-    const cmp = compositeCanvas(820); const cw = cmp.canvas; scale = cmp.scale; W = cw.width; H = cw.height;
-    const d = cw.getContext('2d').getImageData(0, 0, W, H).data;
-    const gray = new Float32Array(W * H);
-    for (let i = 0; i < W * H; i++) gray[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
-    const grad = new Float32Array(W * H); let mx = 1e-6;
-    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
-      const i = y * W + x;
-      const gx = (gray[i - W + 1] + 2 * gray[i + 1] + gray[i + W + 1]) - (gray[i - W - 1] + 2 * gray[i - 1] + gray[i + W - 1]);
-      const gy = (gray[i + W - 1] + 2 * gray[i + W] + gray[i + W + 1]) - (gray[i - W - 1] + 2 * gray[i - W] + gray[i - W + 1]);
-      const m = Math.hypot(gx, gy); grad[i] = m; if (m > mx) mx = m;
-    }
-    cost = new Float32Array(W * H);
-    for (let i = 0; i < W * H; i++) cost[i] = 0.02 + (1 - grad[i] / mx);   // low cost ON edges
-    dist = new Float32Array(W * H).fill(Infinity); par = new Int32Array(W * H).fill(-1);
-  }
-  function snap(px, py) {                                   // nudge onto the strongest nearby edge
-    let bi = py * W + px, bc = cost[bi];
-    for (let dy = -SNAP_R; dy <= SNAP_R; dy++) for (let dx = -SNAP_R; dx <= SNAP_R; dx++) {
-      const x = px + dx, y = py + dy; if (x < 0 || y < 0 || x >= W || y >= H) continue;
-      const i = y * W + x; if (cost[i] < bc) { bc = cost[i]; bi = i; }
-    }
-    return bi;
-  }
-  // window-limited Dijkstra from seed -> shortest-path tree in par[]
-  function dijkstra(s) {
-    const sx = s % W, sy = (s / W) | 0;
-    const x0 = Math.max(1, sx - WIN), x1 = Math.min(W - 2, sx + WIN), y0 = Math.max(1, sy - WIN), y1 = Math.min(H - 2, sy + WIN);
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const i = y * W + x; dist[i] = Infinity; par[i] = -1; }
-    dist[s] = 0;
-    let hd = new Float64Array(8192), hi = new Int32Array(8192); let n = 1; hd[0] = 0; hi[0] = s;
-    const swap = (a, b) => { const td = hd[a]; hd[a] = hd[b]; hd[b] = td; const ti = hi[a]; hi[a] = hi[b]; hi[b] = ti; };
-    const push = (c, idx) => { if (n >= hd.length) { const nd = new Float64Array(hd.length * 2); nd.set(hd); hd = nd; const ni = new Int32Array(hi.length * 2); ni.set(hi); hi = ni; } hd[n] = c; hi[n] = idx; let k = n++; while (k > 0) { const p = (k - 1) >> 1; if (hd[p] <= hd[k]) break; swap(p, k); k = p; } };
-    const pop = () => { const ri = hi[0]; const rc = hd[0]; n--; hd[0] = hd[n]; hi[0] = hi[n]; let k = 0; for (;;) { let l = 2 * k + 1, r = 2 * k + 2, m = k; if (l < n && hd[l] < hd[m]) m = l; if (r < n && hd[r] < hd[m]) m = r; if (m === k) break; swap(m, k); k = m; } return [rc, ri]; };
-    while (n > 0) {
-      const [c, i] = pop(); if (c > dist[i]) continue;
-      const x = i % W, y = (i / W) | 0;
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        if (!dx && !dy) continue; const nx = x + dx, ny = y + dy;
-        if (nx < x0 || nx > x1 || ny < y0 || ny > y1) continue;
-        const ni = ny * W + nx; const nc = c + cost[ni] * ((dx && dy) ? 1.41421 : 1);
-        if (nc < dist[ni]) { dist[ni] = nc; par[ni] = i; push(nc, ni); }
-      }
-    }
-  }
-  function trace(target) { const pts = []; let i = target, g = 0; while (i >= 0 && g++ < 200000) { pts.push({ x: i % W, y: (i / W) | 0 }); if (i === seed) break; i = par[i]; } return pts.reverse(); }
-  function toWork(pt) { return { x: Math.max(0, Math.min(W - 1, Math.round(pt.x * scale))), y: Math.max(0, Math.min(H - 1, Math.round(pt.y * scale))) }; }
-  function render(c) {
-    const o = c.overlayCtx; if (!o) return; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
-    const all = path.concat(live); if (all.length < 2) return;
-    o.save(); o.strokeStyle = '#eaf6ff'; o.lineWidth = 1.6; o.shadowColor = 'rgba(150,210,255,0.9)'; o.shadowBlur = 6;
-    o.beginPath(); o.moveTo(all[0].x / scale, all[0].y / scale); for (let i = 1; i < all.length; i++) o.lineTo(all[i].x / scale, all[i].y / scale); o.stroke(); o.restore();
-  }
-  function finish(c) {
-    active = false; const o = c.overlayCtx; o && o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
-    if (path.length < 3) { path = []; live = []; renderSelection(); return; }
-    const m = document.createElement('canvas'); m.width = W; m.height = H; const g = m.getContext('2d');
-    g.fillStyle = '#fff'; g.beginPath(); g.moveTo(path[0].x, path[0].y); for (let i = 1; i < path.length; i++) g.lineTo(path[i].x, path[i].y); g.closePath(); g.fill();
-    path = []; live = []; compositeSel(m, selMode(), c.canvas);
-  }
+  let pts = [];
   reg({ id: 'magnetic', name: 'Magnetic Lasso', type: 'select', cursor: 'crosshair',
-    onPointerDown(pt, c) { buildField(); seed = snap(toWork(pt).x, toWork(pt).y); path = [{ x: seed % W, y: (seed / W) | 0 }]; live = []; active = true; dijkstra(seed); render(c); },
+    onPointerDown(pt, c) { pts = [pt]; c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
     onPointerMove(pt, c) {
-      if (!active) return; const w0 = toWork(pt), ti = w0.y * W + w0.x;
-      live = trace(ti);
-      const last = path[path.length - 1];
-      if (last && Math.hypot(w0.x - last.x, w0.y - last.y) > STEP && par[ti] >= 0) { path = path.concat(live.slice(1)); seed = snap(w0.x, w0.y); dijkstra(seed); live = []; }
-      render(c);
+      if (!pts.length || !c.overlayCtx) return; pts.push(pt); const o = c.overlayCtx; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
+      o.save(); o.beginPath(); o.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) o.lineTo(pts[i].x, pts[i].y);
+      o.strokeStyle = '#eaf6ff'; o.lineWidth = 2; o.shadowColor = 'rgba(150,210,255,0.9)'; o.shadowBlur = 8; o.stroke(); o.restore();
     },
-    onPointerUp(pt, c) { if (!active) return; const w0 = toWork(pt); const seg = trace(w0.y * W + w0.x); if (seg.length > 1) path = path.concat(seg.slice(1)); finish(c); } });
+    onPointerUp(pt, c) { if (pts.length < 3) { pts = []; renderSelection(); return; } const p = pts; pts = []; aiLassoCommit(p, c, true); } });   // force SAM object snap
 })();
 
 reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
@@ -1164,7 +1090,7 @@ function renderLayerList() {
   list.querySelectorAll('[data-eye]').forEach((b) => b.onclick = (e) => { e.stopPropagation(); const id = +b.dataset.eye; setLayer(id, { visible: !getLayer(id).visible }); reconcileLayers(); });
   list.querySelectorAll('[data-name]').forEach((s) => s.ondblclick = () => { const id = +s.dataset.name; const v = prompt('Layer name:', getLayer(id).name); if (v && v.trim()) setLayer(id, { name: v.trim() }); });
   list.querySelectorAll('[data-layer]').forEach((row) => attachLayerGestures(row));
-  if (document.body.dataset.view === 'right') startThumbs();
+  startThumbs();   // run always — on desktop the Layers panel is docked (data-view stays 'center')
 }
 
 function attachLayerGestures(row) {
@@ -1442,7 +1368,7 @@ function updateStickLabels() {
 /* ============================================================================
  *  SHELL — view switching, swipe gestures, dismiss, grip tabs
  * ========================================================================== */
-function setView(v) { document.body.dataset.view = v; setSession('view', v); updateStickLabels(); if (v === 'right') { renderLayerList(); startThumbs(); } else stopThumbs(); }
+function setView(v) { document.body.dataset.view = v; setSession('view', v); updateStickLabels(); if (v === 'right') renderLayerList(); startThumbs(); }
 
 function initShell() {
   $('#dismiss').addEventListener('pointerdown', () => setView('center'));
@@ -1544,8 +1470,9 @@ function importFile(file, input) {
       const W = Math.max(1, Math.round(img.width * sc)), H = Math.max(1, Math.round(img.height * sc));
       Sys.vom.Unregister(P.layers); for (const id of [...layerCanvases.keys()]) { layerCanvases.get(id).remove(); layerCanvases.delete(id); }
       Sys.vom.Set(P.doc, 'width', W); Sys.vom.Set(P.doc, 'height', H);
-      seedLayers([{ id: 1, name: 'Painting Layer' }, { id: 2, name: 'Background Image' }]); reconcileLayers();
-      layerCanvases.get(2).getContext('2d').drawImage(img, 0, 0, W, H); History.clear(); pushUndo(); recenter(); setView('center');
+      // open the photo as ONE active layer (so erase/select/paint act on the image, not an empty layer above it)
+      seedLayers([{ id: 1, name: 'Image' }]); reconcileLayers();
+      layerCanvases.get(1).getContext('2d').drawImage(img, 0, 0, W, H); History.clear(); pushUndo(); recenter(); setView('center');
       hud(sc < 1 ? `Imported (scaled to ${W}×${H})` : 'Imported image');
     }; img.src = ev.target.result; }; r.readAsDataURL(file);
   }
@@ -1780,9 +1707,9 @@ async function aiTap(pt, c) {                          // SAM point prompt
   } catch (e) { console.error(e); hud('Wand failed — ' + (e.message || e)); }
   finally { aiBusy = false; }
 }
-async function aiLassoCommit(pts, c) {                 // lasso -> SAM box (snap) or raw outline
+async function aiLassoCommit(pts, c, snap = aiSnap) {  // lasso -> SAM object snap or raw outline
   const incoming = blankSelMask(c.canvas, false);      // only the new shape; compositeSel merges it
-  if (aiSnap) {
+  if (snap) {
     if (aiBusy) { renderSelection(); return; } aiNoticeOnce(); aiBusy = true; hud('Loading magic wand…');
     try {
       const { selectLasso } = await import('../assets/ml/select.js' + ML_V);
