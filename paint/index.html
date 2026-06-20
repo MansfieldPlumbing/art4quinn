@@ -520,8 +520,7 @@ reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
     },
     onPointerUp(pt, c) {
       if (pts.length < 3) { pts = []; renderSelection(); return; }
-      const m = blankSelMask(c.canvas, false); drawLassoInto(m, pts, c); pts = [];
-      compositeSel(m, selMode(), c.canvas);
+      const p = pts; pts = []; aiLassoCommit(p, c);   // unified: snaps if AI snap is on, raw outline otherwise
     } });
 })();
 
@@ -851,12 +850,15 @@ function doCopy() {
   const cv = layerCanvases.get(doc('activeLayerId')); if (!cv) return; const sel = doc('selection');
   const out = document.createElement('canvas');
   if (!sel || !sel.bounds) { out.width = cv.width; out.height = cv.height; out.getContext('2d').drawImage(cv, 0, 0); window.__clip = { canvas: out, x: 0, y: 0 }; hud('Copied entire layer'); return; }
-  const b = sel.bounds; if (b.w < 1 || b.h < 1) { hud('Selection too small'); return; }
+  // integer bounds + 1:1 copy so cut→paste recomposes pixel-perfectly (no resample seam)
+  const bx = Math.max(0, Math.floor(sel.bounds.x)), by = Math.max(0, Math.floor(sel.bounds.y));
+  const bw = Math.min(cv.width - bx, Math.ceil(sel.bounds.x + sel.bounds.w) - bx), bh = Math.min(cv.height - by, Math.ceil(sel.bounds.y + sel.bounds.h) - by);
+  if (bw < 1 || bh < 1) { hud('Selection too small'); return; }
   const mask = selectionToMask(sel, cv.width, cv.height);
-  out.width = Math.round(b.w); out.height = Math.round(b.h); const oc = out.getContext('2d');
-  oc.drawImage(cv, b.x, b.y, b.w, b.h, 0, 0, out.width, out.height);
-  oc.globalCompositeOperation = 'destination-in'; oc.drawImage(mask, b.x, b.y, b.w, b.h, 0, 0, out.width, out.height);   // clip to the exact mask shape
-  window.__clip = { canvas: out, x: Math.round(b.x), y: Math.round(b.y) }; hud('Copied selection');
+  out.width = bw; out.height = bh; const oc = out.getContext('2d');
+  oc.drawImage(cv, bx, by, bw, bh, 0, 0, bw, bh);
+  oc.globalCompositeOperation = 'destination-in'; oc.drawImage(mask, bx, by, bw, bh, 0, 0, bw, bh);   // clip to the exact mask shape
+  window.__clip = { canvas: out, x: bx, y: by }; hud('Copied selection');
 }
 function doCut() {
   const cv = layerCanvases.get(doc('activeLayerId')); if (!cv) return; const sel = doc('selection'); doCopy(); pushUndo();
@@ -1700,13 +1702,21 @@ async function aiLassoCommit(pts, c) {                 // lasso -> SAM box (snap
   } else { drawLassoInto(incoming, pts, c); }
   compositeSel(incoming, selMode(), c.canvas);
 }
-function selectionToMask(sel, W, H) {                   // -> layer-size mask for the eraser
+function selectionToMask(sel, W, H) {                   // -> layer-size HARD-edged mask
   if (!sel) return null;
-  if (sel.mask) { const m = document.createElement('canvas'); m.width = W; m.height = H; m.getContext('2d').drawImage(sel.mask, 0, 0, W, H); return m; }
-  const m = document.createElement('canvas'); m.width = W; m.height = H; const g = m.getContext('2d'); g.fillStyle = '#fff';
-  if (sel.type === 'lasso' && sel.points && sel.points.length > 2) { g.beginPath(); g.moveTo(sel.points[0].x, sel.points[0].y); for (let i = 1; i < sel.points.length; i++) g.lineTo(sel.points[i].x, sel.points[i].y); g.closePath(); g.fill(); }
-  else if (sel.bounds) g.fillRect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h);
-  else return null;
+  const m = document.createElement('canvas'); m.width = W; m.height = H; const g = m.getContext('2d');
+  if (sel.mask) { g.drawImage(sel.mask, 0, 0, W, H); }
+  else {
+    g.fillStyle = '#fff';
+    if (sel.type === 'lasso' && sel.points && sel.points.length > 2) { g.beginPath(); g.moveTo(sel.points[0].x, sel.points[0].y); for (let i = 1; i < sel.points.length; i++) g.lineTo(sel.points[i].x, sel.points[i].y); g.closePath(); g.fill(); }
+    else if (sel.bounds) g.fillRect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h);
+    else return null;
+  }
+  // Threshold to hard edges: a soft (antialiased/upscaled) edge makes the cut hole and the
+  // pasted piece each ~50% alpha at the boundary -> a translucent seam when re-composited.
+  const id = g.getImageData(0, 0, W, H), d = id.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= 128 ? 255 : 0;
+  g.putImageData(id, 0, 0);
   return m;
 }
 function aiClearSel() { if (doc('selection')) { pushUndo(); setSelection(null); } }

@@ -131,17 +131,11 @@ async function _inpaintInfer(imageCanvas, maskCanvas, onStatus) {
   const inImg = names.find((n) => /image|img|input/i.test(n)) || names[0];
   const inMask = names.find((n) => /mask/i.test(n)) || names[1];
 
-  // run, trying NHWC then NCHW (shapes aren't documented)
-  let out = null;
-  for (const nchw of [false, true]) {
-    try {
-      const feeds = {}; feeds[inImg] = imageTensor(ort, rgba, w, h, nchw); feeds[inMask] = maskTensor(ort, mrgba, w, h, nchw);
-      const r = await session.run(feeds); out = r[session.outputNames[0]]; break;
-    } catch (e) {
-      if (isGpuError(e)) throw e;                                  // let the WASM fallback handle GPU errors
-      if (nchw) throw e;                                           // both layouts failed
-    }
-  }
+  // MI-GAN pipeline expects NCHW uint8: image [1,3,H,W], mask [1,1,H,W] (255 keep, 0 erase).
+  const feeds = {};
+  feeds[inImg] = imageTensor(ort, rgba, w, h, true);
+  feeds[inMask] = maskTensor(ort, mrgba, w, h, true);
+  const r = await session.run(feeds); const out = r[session.outputNames[0]];
 
   // decode output (auto-detect layout from dims)
   const d = out.data, dims = out.dims;
