@@ -77,17 +77,24 @@ function scaledCanvas(src, maxSide) {
   return { canvas: c, scale: s };
 }
 
-// Encode the image once (cached by `key`).
-export async function primeSelector(srcCanvas, key, onStatus) {
-  if (_cacheKey === key && _emb) return;
-  const { T, model, processor } = await ensure(onStatus);
-  const { canvas, scale } = scaledCanvas(srcCanvas, MAX_IN);
-  onStatus && onStatus('reading the picture…');
-  const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
-  const image = await T.RawImage.read(blob);
-  const inputs = await processor(image);
-  const emb = await model.get_image_embeddings(inputs);
-  _cacheKey = key; _emb = { emb, vision: inputs }; _scale = scale; _embW = canvas.width; _embH = canvas.height;
+// Encode the image once (cached by `key`). De-dupes concurrent calls so a pre-warm and
+// the actual snap share ONE encode instead of racing two.
+let _primeP = null, _primeKey = null;
+export function primeSelector(srcCanvas, key, onStatus) {
+  if (_cacheKey === key && _emb) return Promise.resolve();
+  if (_primeP && _primeKey === key) return _primeP;
+  _primeKey = key;
+  _primeP = (async () => {
+    const { T, model, processor } = await ensure(onStatus);
+    const { canvas, scale } = scaledCanvas(srcCanvas, MAX_IN);
+    onStatus && onStatus('reading the picture…');
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+    const image = await T.RawImage.read(blob);
+    const inputs = await processor(image);
+    const emb = await model.get_image_embeddings(inputs);
+    _cacheKey = key; _emb = { emb, vision: inputs }; _scale = scale; _embW = canvas.width; _embH = canvas.height;
+  })().finally(() => { _primeP = null; });
+  return _primeP;
 }
 
 // Tap at (x,y) in srcCanvas pixels -> best object mask (SAM point prompt).

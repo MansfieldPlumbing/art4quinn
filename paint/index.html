@@ -529,7 +529,7 @@ reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
 (() => {
   let pts = [];
   reg({ id: 'magnetic', name: 'Magnetic Lasso', type: 'select', cursor: 'crosshair',
-    onPointerDown(pt, c) { pts = [pt]; c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
+    onPointerDown(pt, c) { if (aiBusy) { hud('AI is busy — one moment…'); pts = []; return; } pts = [pt]; aiPrewarm(c.canvas); c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
     onPointerMove(pt, c) {
       if (!pts.length || !c.overlayCtx) return; pts.push(pt); const o = c.overlayCtx; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
       o.save(); o.beginPath(); o.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) o.lineTo(pts[i].x, pts[i].y);
@@ -1545,7 +1545,7 @@ let aiBusy = false;
 // fresh on every reload so a deployed fix takes effect without a hard refresh).
 const ML_V = '?v=' + Date.now();
 async function aiEraseBg() {
-  if (aiBusy) return;
+  if (aiBusy) { hud('Hold on — the AI is still working…'); return; }
   const aid = doc('activeLayerId'); const cv = layerCanvases.get(aid);
   if (!cv) { hud('No active layer'); return; }
   if (getLayer(aid)?.locked) { hud('Layer is locked'); return; }
@@ -1707,6 +1707,14 @@ async function aiTap(pt, c) {                          // SAM point prompt
   } catch (e) { console.error(e); hud('Wand failed — ' + (e.message || e)); }
   finally { aiBusy = false; }
 }
+// start encoding the image in the background so the snap is ready by the time the loop is drawn
+function aiPrewarm(srcCanvas) {
+  if (aiBusy) return;
+  try {
+    const key = doc('activeLayerId') + ':' + srcCanvas.width + 'x' + srcCanvas.height;
+    import('../assets/ml/select.js' + ML_V).then(({ primeSelector }) => primeSelector(srcCanvas, key, (s) => hud(s)).catch(() => {})).catch(() => {});
+  } catch (_) {}
+}
 async function aiLassoCommit(pts, c, snap = aiSnap) {  // lasso -> SAM object snap or raw outline
   const incoming = blankSelMask(c.canvas, false);      // only the new shape; compositeSel merges it
   if (snap) {
@@ -1741,7 +1749,7 @@ function selectionToMask(sel, W, H) {                   // -> layer-size HARD-ed
 }
 function aiClearSel() { if (doc('selection')) { pushUndo(); setSelection(null); } }
 async function aiMagicErase() {
-  if (aiBusy) return;
+  if (aiBusy) { hud('Hold on — the AI is still working…'); return; }
   const aid = doc('activeLayerId'); const cv = layerCanvases.get(aid);
   if (!cv) { hud('No active layer'); return; }
   if (getLayer(aid)?.locked) { hud('Layer is locked'); return; }
