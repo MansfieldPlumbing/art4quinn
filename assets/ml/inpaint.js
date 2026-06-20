@@ -94,18 +94,6 @@ function dilateMask(mask, r) {
   g.putImageData(id, 0, 0); return c;
 }
 
-function imageTensor(ort, rgba, w, h, nchw) {
-  const N = w * h;
-  if (nchw) { const t = new Uint8Array(3 * N); for (let i = 0; i < N; i++) { t[i] = rgba[i * 4]; t[N + i] = rgba[i * 4 + 1]; t[2 * N + i] = rgba[i * 4 + 2]; } return new ort.Tensor('uint8', t, [1, 3, h, w]); }
-  const t = new Uint8Array(N * 3); for (let i = 0; i < N; i++) { t[i * 3] = rgba[i * 4]; t[i * 3 + 1] = rgba[i * 4 + 1]; t[i * 3 + 2] = rgba[i * 4 + 2]; }
-  return new ort.Tensor('uint8', t, [1, h, w, 3]);
-}
-function maskTensor(ort, mrgba, w, h, nchw) {
-  const N = w * h, t = new Uint8Array(N);
-  for (let i = 0; i < N; i++) t[i] = mrgba[i * 4 + 3] > 16 ? 0 : 255;   // selection(opaque) -> erase -> 0; else keep -> 255
-  return new ort.Tensor('uint8', t, nchw ? [1, 1, h, w] : [1, h, w, 1]);
-}
-
 export async function inpaint(imageCanvas, maskCanvas, onStatus) {
   if (_busy) throw new Error('eraser is busy');
   _busy = true;
@@ -116,46 +104,51 @@ export async function inpaint(imageCanvas, maskCanvas, onStatus) {
 async function _inpaintInfer(imageCanvas, maskCanvas, onStatus) {
   const { ort, session } = await ensure(onStatus);
   onStatus && onStatus('erasing…');
+  const W = imageCanvas.width, H = imageCanvas.height;
 
-  const pad = Math.max(3, Math.min(28, Math.round(Math.max(imageCanvas.width, imageCanvas.height) * PAD)));
-  const mask = dilateMask(maskCanvas, pad);
+  const pad = Math.max(3, Math.min(40, Math.round(Math.max(W, H) * PAD)));
+  const mask = dilateMask(maskCanvas, pad);                         // original-res, opaque where erased
 
-  const scale = Math.min(1, MAX_IN / Math.max(imageCanvas.width, imageCanvas.height));
-  const w = Math.max(1, Math.round(imageCanvas.width * scale)), h = Math.max(1, Math.round(imageCanvas.height * scale));
-  const ic = document.createElement('canvas'); ic.width = w; ic.height = h; ic.getContext('2d').drawImage(imageCanvas, 0, 0, w, h);
-  const mc = document.createElement('canvas'); mc.width = w; mc.height = h; mc.getContext('2d').drawImage(mask, 0, 0, w, h);
-  const rgba = ic.getContext('2d').getImageData(0, 0, w, h).data;
-  const mrgba = mc.getContext('2d').getImageData(0, 0, w, h).data;
+  // The MI-GAN pipeline runs at a FIXED 512x512 — feed exactly that (the proven path);
+  // feeding native resolution scrambles the model's internal reshape -> noise.
+  const S = SIZE, N = S * S;
+  const ic = document.createElement('canvas'); ic.width = S; ic.height = S;
+  const igc = ic.getContext('2d'); igc.imageSmoothingQuality = 'high'; igc.drawImage(imageCanvas, 0, 0, W, H, 0, 0, S, S);
+  const mc = document.createElement('canvas'); mc.width = S; mc.height = S;
+  const mgc = mc.getContext('2d'); mgc.imageSmoothingEnabled = false; mgc.drawImage(mask, 0, 0, W, H, 0, 0, S, S);
+  const rgba = igc.getImageData(0, 0, S, S).data;
+  const mrgba = mgc.getImageData(0, 0, S, S).data;
 
+  // image NCHW planar uint8 [1,3,512,512]; mask [1,1,512,512] (0 = erase, 255 = keep)
+  const imgT = new Uint8Array(3 * N), mskT = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    imgT[i] = rgba[i * 4]; imgT[N + i] = rgba[i * 4 + 1]; imgT[2 * N + i] = rgba[i * 4 + 2];
+    mskT[i] = mrgba[i * 4 + 3] > 128 ? 0 : 255;
+  }
   const names = session.inputNames;
   const inImg = names.find((n) => /image|img|input/i.test(n)) || names[0];
   const inMask = names.find((n) => /mask/i.test(n)) || names[1];
-
-  // MI-GAN pipeline expects NCHW uint8: image [1,3,H,W], mask [1,1,H,W] (255 keep, 0 erase).
   const feeds = {};
-  feeds[inImg] = imageTensor(ort, rgba, w, h, true);
-  feeds[inMask] = maskTensor(ort, mrgba, w, h, true);
-  const r = await session.run(feeds); const out = r[session.outputNames[0]];
+  feeds[inImg] = new ort.Tensor('uint8', imgT, [1, 3, S, S]);
+  feeds[inMask] = new ort.Tensor('uint8', mskT, [1, 1, S, S]);
+  const out = (await session.run(feeds))[session.outputNames[0]];
 
-  // decode output (auto-detect layout from dims)
-  const d = out.data, dims = out.dims;
-  let ow, oh, nchwOut;
-  if (dims.length === 4) { if (dims[3] === 3) { oh = dims[1]; ow = dims[2]; nchwOut = false; } else { oh = dims[2]; ow = dims[3]; nchwOut = true; } }
-  else { if (dims[dims.length - 1] === 3) { oh = dims[0]; ow = dims[1]; nchwOut = false; } else { oh = dims[1]; ow = dims[2]; nchwOut = true; } }
-  const N = ow * oh;
-  const oc = document.createElement('canvas'); oc.width = ow; oc.height = oh;
-  const oid = oc.getContext('2d').createImageData(ow, oh);
-  const f = d instanceof Float32Array ? 255 : 1;                  // handle the rare float export
+  // output is uint8 NCHW planar [1,3,512,512] -> interleaved RGBA
+  const d = out.data;
+  const oc = document.createElement('canvas'); oc.width = S; oc.height = S;
+  const oid = oc.getContext('2d').createImageData(S, S);
   for (let i = 0; i < N; i++) {
-    if (nchwOut) { oid.data[i*4] = d[i]*f; oid.data[i*4+1] = d[N+i]*f; oid.data[i*4+2] = d[2*N+i]*f; }
-    else { oid.data[i*4] = d[i*3]*f; oid.data[i*4+1] = d[i*3+1]*f; oid.data[i*4+2] = d[i*3+2]*f; }
-    oid.data[i*4+3] = 255;
+    oid.data[i * 4] = d[i]; oid.data[i * 4 + 1] = d[N + i]; oid.data[i * 4 + 2] = d[2 * N + i]; oid.data[i * 4 + 3] = 255;
   }
   oc.getContext('2d').putImageData(oid, 0, 0);
 
-  // back to the original size
-  const result = document.createElement('canvas'); result.width = imageCanvas.width; result.height = imageCanvas.height;
-  const rctx = result.getContext('2d'); rctx.imageSmoothingQuality = 'high'; rctx.drawImage(oc, 0, 0, result.width, result.height);
+  // resize the 512 result back to full size, then keep ONLY the (dilated) hole — the rest stays full-res original
+  const patch = document.createElement('canvas'); patch.width = W; patch.height = H;
+  const pg = patch.getContext('2d'); pg.imageSmoothingQuality = 'high';
+  pg.drawImage(oc, 0, 0, S, S, 0, 0, W, H);
+  pg.globalCompositeOperation = 'destination-in'; pg.drawImage(mask, 0, 0);
+  const result = document.createElement('canvas'); result.width = W; result.height = H;
+  const rg = result.getContext('2d'); rg.drawImage(imageCanvas, 0, 0); rg.drawImage(patch, 0, 0);
   onStatus && onStatus('erased ✨');
   return result;
 }

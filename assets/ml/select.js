@@ -46,7 +46,7 @@ async function ensure(onStatus) {
     onStatus && onStatus('loading magic wand…');
     const T = await import(/* @vite-ignore */ CDN);
     T.env.allowLocalModels = false;
-    const dtype = device === 'webgpu' ? 'fp16' : 'q8';
+    const dtype = device === 'webgpu' ? 'fp32' : 'q8';   // SlimSAM has no fp16 export -> fp32 on webgpu
     const progress_callback = (p) => {
       if (onStatus && p.status === 'progress' && typeof p.progress === 'number') onStatus(`downloading wand ${Math.round(p.progress)}%`);
     };
@@ -172,6 +172,6 @@ function _decodeByLasso(srcCanvas, m, pts) {
     const iou = uni ? inter / uni : 0;
     if (iou > bestIoU) { bestIoU = iou; best = k; }
   }
-  if (best < 0 || bestIoU < 0.08) return { mask: null, bounds: null, any: false };   // nothing fits -> caller keeps the raw outline
+  if (best < 0 || bestIoU < 0.04) return { mask: null, bounds: null, any: false };   // nothing fits -> caller keeps the raw outline
   return _buildMask(srcCanvas, data, best * W * H, W, H);
 }
