@@ -1690,11 +1690,9 @@ async function aiLassoCommit(pts, c) {                 // lasso -> SAM box (snap
   if (aiSnap) {
     if (aiBusy) { renderSelection(); return; } aiNoticeOnce(); aiBusy = true; hud('Loading magic wand…');
     try {
-      const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
-      const box = { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
-      const { selectBox } = await import('../assets/ml/select.js');
+      const { selectLasso } = await import('../assets/ml/select.js');
       const key = doc('activeLayerId') + ':' + c.canvas.width + 'x' + c.canvas.height;
-      const { mask, any } = await selectBox(c.canvas, box, key, (s) => hud(s));
+      const { mask, any } = await selectLasso(c.canvas, pts, key, (s) => hud(s));
       if (any) { incoming.getContext('2d').drawImage(mask, 0, 0, incoming.width, incoming.height); hud('Snapped to object ✨'); }
       else { drawLassoInto(incoming, pts, c); hud('No object found — kept your outline'); }
     } catch (e) { console.error(e); drawLassoInto(incoming, pts, c); hud('AI snap failed — kept your outline'); }

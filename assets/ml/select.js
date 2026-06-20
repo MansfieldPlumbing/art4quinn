@@ -98,12 +98,13 @@ export async function selectAt(srcCanvas, x, y, key, onStatus) {
   finally { _busy = false; }
 }
 
-// Rough box {x0,y0,x1,y1} in srcCanvas pixels -> best object mask (SAM box prompt).
-// This is the Samsung-style "lasso roughly, snap to the object" path.
-export async function selectBox(srcCanvas, box, key, onStatus) {
+// Lasso points (srcCanvas px) -> snap to the object the user roughly outlined.
+// Prompts SAM at the lasso centroid, then picks the proposal that best OVERLAPS the
+// lasso — so a small outline yields a small object, not a big background region.
+export async function selectLasso(srcCanvas, pts, key, onStatus) {
   if (_busy) throw new Error('wand is busy');
   _busy = true;
-  try { return await withWasmFallback(() => _boxInfer(srcCanvas, box, key, onStatus), onStatus); }
+  try { return await withWasmFallback(() => _lassoInfer(srcCanvas, pts, key, onStatus), onStatus); }
   finally { _busy = false; }
 }
 
@@ -117,24 +118,20 @@ async function _selectInfer(srcCanvas, x, y, key, onStatus) {
   return _decode(srcCanvas, await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes), outputs.iou_scores.data);
 }
 
-async function _boxInfer(srcCanvas, box, key, onStatus) {
+async function _lassoInfer(srcCanvas, pts, key, onStatus) {
   const { T, model, processor } = await ensure(onStatus);
   await primeSelector(srcCanvas, key, onStatus);
   onStatus && onStatus('snapping to object…');
-  // SAM encodes a box as two points with labels 2 (top-left) and 3 (bottom-right).
-  // This reuses the same input_points path the tap prompt uses (more portable than input_boxes).
-  const input_points = new T.Tensor('float32', [box.x0 * _scale, box.y0 * _scale, box.x1 * _scale, box.y1 * _scale], [1, 1, 2, 2]);
-  const input_labels = new T.Tensor('int64', [2n, 3n], [1, 1, 2]);
+  let cx = 0, cy = 0; for (const p of pts) { cx += p.x; cy += p.y; } cx /= pts.length; cy /= pts.length;
+  const input_points = new T.Tensor('float32', [cx * _scale, cy * _scale], [1, 1, 1, 2]);
+  const input_labels = new T.Tensor('int64', [1n], [1, 1, 1]);
   const outputs = await model({ ..._emb.emb, input_points, input_labels });
-  return _decode(srcCanvas, await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes), outputs.iou_scores.data);
+  const masks = await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes);
+  return _decodeByLasso(srcCanvas, masks[0], pts);
 }
 
-// pick the highest-IoU proposal -> a mask canvas the size of srcCanvas + bounds
-function _decode(srcCanvas, masks, scores) {
-  let best = 0; for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
-  const m = masks[0];                                // Tensor [nMasks, H, W] (bool)
-  const H = m.dims[m.dims.length - 2], W = m.dims[m.dims.length - 1];
-  const data = m.data, off = best * H * W;
+// build a srcCanvas-size output mask + bounds from one proposal plane
+function _buildMask(srcCanvas, data, off, W, H) {
   const mc = document.createElement('canvas'); mc.width = W; mc.height = H;
   const mctx = mc.getContext('2d'); const id = mctx.createImageData(W, H);
   let minX = W, minY = H, maxX = 0, maxY = 0, any = false;
@@ -151,4 +148,30 @@ function _decode(srcCanvas, masks, scores) {
   const sx = out.width / W, sy = out.height / H;
   const bounds = any ? { x: minX * sx, y: minY * sy, w: Math.max(1, (maxX - minX + 1) * sx), h: Math.max(1, (maxY - minY + 1) * sy) } : null;
   return { mask: out, bounds, any };
+}
+// tap: highest-confidence proposal
+function _decode(srcCanvas, masks, scores) {
+  const m = masks[0]; const H = m.dims[m.dims.length - 2], W = m.dims[m.dims.length - 1];
+  let best = 0; for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
+  return _buildMask(srcCanvas, m.data, best * W * H, W, H);
+}
+// lasso: proposal with the best IoU against the drawn outline (respects the lasso's size)
+function _decodeByLasso(srcCanvas, m, pts) {
+  const H = m.dims[m.dims.length - 2], W = m.dims[m.dims.length - 1];
+  const data = m.data, K = Math.max(1, Math.round(data.length / (W * H)));
+  const lc = document.createElement('canvas'); lc.width = W; lc.height = H; const lg = lc.getContext('2d');
+  const sxp = W / srcCanvas.width, syp = H / srcCanvas.height;
+  lg.fillStyle = '#fff'; lg.beginPath(); lg.moveTo(pts[0].x * sxp, pts[0].y * syp);
+  for (let i = 1; i < pts.length; i++) lg.lineTo(pts[i].x * sxp, pts[i].y * syp);
+  lg.closePath(); lg.fill();
+  const lass = lg.getImageData(0, 0, W, H).data;
+  let best = -1, bestIoU = -1;
+  for (let k = 0; k < K; k++) {
+    const off = k * W * H; let inter = 0, uni = 0;
+    for (let i = 0; i < W * H; i++) { const a = data[off + i] ? 1 : 0, b = lass[i * 4 + 3] > 16 ? 1 : 0; if (a && b) inter++; if (a || b) uni++; }
+    const iou = uni ? inter / uni : 0;
+    if (iou > bestIoU) { bestIoU = iou; best = k; }
+  }
+  if (best < 0 || bestIoU < 0.08) return { mask: null, bounds: null, any: false };   // nothing fits -> caller keeps the raw outline
+  return _buildMask(srcCanvas, data, best * W * H, W, H);
 }
