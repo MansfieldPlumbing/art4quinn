@@ -146,7 +146,7 @@ function processImage(img) {
 // corner flood-fill — so characters on non-flat backgrounds key out cleanly.
 let aiSilhouette = false, lastCh = null;
 async function processImageAI(img) {
-  const { foregroundMask } = await import('../assets/ml/segment.js');
+  const { foregroundMask } = await import('../assets/ml/segment.js?v=' + Math.floor(Date.now() / 86400000));
   const m = await foregroundMask(img, setStatus);            // m.data[i] = subject alpha 0..255
   const scale = Math.min(1, MAX_TEX / Math.max(m.width, m.height));
   const w = Math.round(m.width * scale), h = Math.round(m.height * scale);

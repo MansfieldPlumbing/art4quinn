@@ -100,7 +100,7 @@ function tileFor(file){
       if (cut.dataset.busy) return;
       cut.dataset.busy = '1'; const orig = cut.textContent; cut.textContent = '…';
       try {
-        const { removeBackground } = await import('./assets/ml/segment.js');
+        const { removeBackground } = await import('./assets/ml/segment.js?v=' + Math.floor(Date.now() / 86400000));
         const canvas = await removeBackground('gallery/' + file, (s) => { cut.title = s; });
         const a = document.createElement('a');
         a.download = file.replace(/\.[^.]+$/, '') + '-nobg.png';
