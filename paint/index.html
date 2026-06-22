@@ -720,8 +720,18 @@ const allCanvasRefs = () => getOrder().map((id) => ({ id, canvas: layerCanvases.
 const History = (() => {
   let undo = [], redo = [], max = 40;
   const sync = () => { setSession('canUndo', undo.length > 1); setSession('canRedo', redo.length > 0); };
-  const grab = () => ({ layers: allCanvasRefs().filter((l) => l.canvas.width > 0).map((l) => ({ id: l.id, data: l.canvas.getContext('2d').getImageData(0, 0, l.canvas.width, l.canvas.height) })), sel: doc('selection') || null });
-  const apply = (st) => { st.layers.forEach((s) => { const c = layerCanvases.get(s.id); if (c) c.getContext('2d').putImageData(s.data, 0, 0); }); Sys.vom.Set(P.doc, 'selection', st.sel); };
+  const grab = () => ({ w: doc('width'), h: doc('height'), layers: allCanvasRefs().filter((l) => l.canvas.width > 0).map((l) => ({ id: l.id, w: l.canvas.width, h: l.canvas.height, data: l.canvas.getContext('2d').getImageData(0, 0, l.canvas.width, l.canvas.height) })), sel: doc('selection') || null });
+  const apply = (st) => {
+    let dim = false;
+    if (st.w && st.h && (st.w !== doc('width') || st.h !== doc('height'))) { Sys.vom.Set(P.doc, 'width', st.w); Sys.vom.Set(P.doc, 'height', st.h); dim = true; }
+    st.layers.forEach((s) => {
+      const c = layerCanvases.get(s.id); if (!c) return;
+      if (s.w && s.h && (c.width !== s.w || c.height !== s.h)) { c.width = s.w; c.height = s.h; dim = true; }   // resizing the canvas also clears it; the putImageData below repaints
+      c.getContext('2d').putImageData(s.data, 0, 0);
+    });
+    Sys.vom.Set(P.doc, 'selection', st.sel);
+    if (dim) { reconcileLayers(); recenter(); setView('center'); }   // dimensions changed (crop/resize undo) — refit the view
+  };
   return {
     push() { const st = grab(); if (!st.layers.length) return; undo.push(st); if (undo.length > max) undo.shift(); redo = []; sync(); },
     clear() { undo = []; redo = []; sync(); },
@@ -1831,13 +1841,14 @@ function hideCropFrame() { if (_cropFrame) _cropFrame.style.display = 'none'; }
 function cropTo(rect) {
   const rx = Math.round(rect.x), ry = Math.round(rect.y);
   const rw = Math.max(1, Math.round(rect.w)), rh = Math.max(1, Math.round(rect.h));
+  pushUndo();   // snapshot BEFORE mutating dimensions so undo restores the original canvas size (like every other tool)
   const backups = getOrder().map((id) => { const cv = layerCanvases.get(id); const b = document.createElement('canvas'); b.width = cv.width; b.height = cv.height; b.getContext('2d').drawImage(cv, 0, 0); return { id, b }; });
   Sys.vom.Set(P.doc, 'width', rw); Sys.vom.Set(P.doc, 'height', rh);
   for (const { id } of backups) { const cv = layerCanvases.get(id); cv.width = rw; cv.height = rh; }
   reconcileLayers();
   backups.forEach(({ id, b }) => { const cv = layerCanvases.get(id); cv.getContext('2d').drawImage(b, -rx, -ry); });   // shift content; outside is clipped, new area transparent
   setSelection(null);
-  History.push(); recenter(); setView('center'); hud('Canvas ' + rw + ' × ' + rh);
+  recenter(); setView('center'); hud('Canvas ' + rw + ' × ' + rh);
 }
 
 /* ---- selection shortcuts ---- */
@@ -1851,12 +1862,14 @@ function deleteSelection() {
 }
 
 function applyResize(nw, nh) {
-  if (!(nw > 0 && nh > 0)) return; const backups = getOrder().map((id) => { const cv = layerCanvases.get(id); const b = document.createElement('canvas'); b.width = cv.width; b.height = cv.height; b.getContext('2d').drawImage(cv, 0, 0); return { id, b }; });
+  if (!(nw > 0 && nh > 0)) return;
+  pushUndo();   // snapshot BEFORE resize so undo restores the original dimensions
+  const backups = getOrder().map((id) => { const cv = layerCanvases.get(id); const b = document.createElement('canvas'); b.width = cv.width; b.height = cv.height; b.getContext('2d').drawImage(cv, 0, 0); return { id, b }; });
   Sys.vom.Set(P.doc, 'width', nw); Sys.vom.Set(P.doc, 'height', nh);
   for (const { id } of backups) { const cv = layerCanvases.get(id); cv.width = nw; cv.height = nh; }
   reconcileLayers();
   backups.forEach(({ id, b }) => { const cv = layerCanvases.get(id); cv.getContext('2d').drawImage(b, (nw - b.width) / 2, (nh - b.height) / 2); });
-  History.push(); recenter(); setView('center');
+  recenter(); setView('center');
 }
 
 /* ============================================================================
