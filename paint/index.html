@@ -3,10 +3,18 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-<title>FlickPaint</title>
+<title>Pro Paint Shop</title>
+<meta name="description" content="Pro Paint Shop — a fast, installable on-device paint studio with AI select & erase." />
+<link rel="manifest" href="../manifest.webmanifest" />
+<meta name="theme-color" content="#0f1118" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Pro Paint Shop" />
+<link rel="apple-touch-icon" href="../assets/icons/icon-180.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="../assets/icons/icon-192.png" />
 
 <!--
-  FlickPaint — single-file vanilla applet (the 2D paint app; living reference for a true flickpaint3d).
+  Pro Paint Shop — single-file vanilla applet (the 2D paint app; living reference for a true flickpaint3d).
   Truth is NOT held in this page. All live state flows through the Sys facade
   (Sys.registry = Cm-shaped contract/catalog, Sys.vom = Vom-shaped object store).
   Standalone (github.io / file://) binds an EmbeddedProvider; a subsystem host
@@ -17,8 +25,8 @@
 {
   "obp": 1,
   "type": "Applet",
-  "name": "FlickPaint",
-  "title": "FlickPaint",
+  "name": "Pro Paint Shop",
+  "title": "Pro Paint Shop",
   "mount": "\\Applets\\FlickPaint",
   "entry": "index.html",
   "provider": { "contract": "1.0", "inject": "window.__SUBSYSTEM_PROVIDER__" },
@@ -1461,7 +1469,7 @@ function seedLayers(defs) {
 function exportPNG() {
   const W = doc('width'), H = doc('height'); const out = document.createElement('canvas'); out.width = W; out.height = H; const g = out.getContext('2d');
   [...getLayers()].reverse().forEach((l) => { if (!l.visible) return; const cv = layerCanvases.get(l.id); if (!cv) return; g.globalAlpha = l.opacity / 100; const b = blendCss(l.blendMode); g.globalCompositeOperation = b === 'normal' ? 'source-over' : b; g.drawImage(cv, 0, 0); });
-  const a = document.createElement('a'); a.href = out.toDataURL('image/png'); a.download = `flickpaint-${W}x${H}.png`; document.body.appendChild(a); a.click(); a.remove(); setView('center'); hud('Exported PNG');
+  const a = document.createElement('a'); a.href = out.toDataURL('image/png'); a.download = `paint-pro-${W}x${H}.png`; document.body.appendChild(a); a.click(); a.remove(); setView('center'); hud('Exported PNG');
 }
 function saveProject() {
   const proj = { version: 1, width: doc('width'), height: doc('height'), order: getOrder(), layers: getLayers().map((l) => ({ ...l, png: layerCanvases.get(l.id).toDataURL('image/png') })) };
@@ -1890,7 +1898,7 @@ function boot() {
     tool: saved.tool || 'brush', color: saved.color || '#111827',
     brushSize: saved.brushSize || 18, opacity: saved.opacity || 100,
     tolerance: saved.tolerance ?? 42,
-    view: 'center', thumbstickEnabled: saved.thumbstickEnabled !== false,
+    view: 'center', thumbstickEnabled: saved.thumbstickEnabled === true,   // off by default; opt-in via the joystick toggle
     canUndo: false, canRedo: false,
   });
 
@@ -1922,7 +1930,7 @@ function boot() {
     toolCtx, reconcileLayers, applyWorld, recenter,
     doCopy, doCut, doPaste, exportPNG, saveProject, loadProject, newProject, applyResize, importFile, hud,
   };
-  console.log('[FlickPaint] booted — provider mode:', Sys.mode);
+  console.log('[Pro Paint Shop] booted — provider mode:', Sys.mode);
 }
 
 boot();
