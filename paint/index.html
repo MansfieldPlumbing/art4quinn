@@ -83,6 +83,20 @@
     <div class="label ll">Tools</div><div class="label lr">Layers</div>
     <div id="nub"><div class="core"></div></div>
   </div>
+
+  <!-- Object-eraser staged action bar (Draw → Snap → Preview → Refine → Erase) -->
+  <div id="erasebar" class="mica-panel">
+    <button class="eb icon" id="eb-undo" title="Undo"><span class="ic" data-icon="undo"></span></button>
+    <button class="eb icon" id="eb-redo" title="Redo"><span class="ic" data-icon="redo"></span></button>
+    <div class="ebsep"></div>
+    <div class="ebseg">
+      <button class="eb icon" id="eb-add" title="Add to the selection"><span class="ic" data-icon="plusc"></span></button>
+      <button class="eb icon" id="eb-remove" title="Remove from the selection"><span class="ic" data-icon="minusc"></span></button>
+    </div>
+    <div class="ebsep"></div>
+    <button class="eb icon" id="eb-cancel" title="Cancel"><span class="ic" data-icon="x"></span></button>
+    <button class="eb cta" id="eb-erase" title="Erase the selected object"><span class="ic" data-icon="ai"></span><span>Erase</span></button>
+  </div>
 </div>
 
 <script type="module">
@@ -323,7 +337,27 @@ const ICONS = {
   zap: SVG('<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>'),
   maximize: SVG('<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M16 21h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>'),
 };
-function iconHTML(name) { return ICONS[name] || ICONS.square; }
+// Cascadia Code NF (Nerd Font) glyphs — authoritative codepoints read from the
+// font's cmap/post tables (all verified present). Any name not here falls back to
+// the legacy inline SVG above, so no call site can break.
+const GLYPHS = {
+  move:0xF01BE, hand:0xF0041, select:0xF0489, lasso:0xF0F03, wand:0xF0068, crop:0xF019E,
+  brush:0xF00E3, pencil:0xF03EB, pen:0xF0D12, marker:0xF0E31, fill:0xF0266, gradient:0xF06A0,
+  pipette:0xF020A, droplets:0xF1853, droplet:0xF1853, focus:0xF02F1, sun:0xF00DF, flame:0xF0238,
+  contrast:0xF0195, text:0xF0284, square:0xF0763, circle:0xF0765, triangle:0xF0537, waves:0xF00B5,
+  sparkles:0xF0674, fingerprint:0xF0237, target:0xF05DD, plus:0xF0415, trash:0xF0A7A, eye:0xF0208,
+  eyeoff:0xF0209, copy:0xF018F, blend:0xF1853, lock:0xF033E, lockkey:0xF033E, chevup:0xF0143,
+  chevdown:0xF0140, chevleft:0xF0141, griph:0xF01D8, gripv:0xF01D9, box:0xF01A7, fileplus:0xF0EED,
+  upload:0xF011D, save:0xF0818, download:0xF0120, undo:0xF054D, redo:0xF044F, gamepad:0xF0297,
+  check:0xF012C, x:0xF0156, sliders:0xF1542, palette:0xF0E0C, scanline:0xF13D8, zap:0xF0241,
+  maximize:0xF004C, robot:0xF167A, ai:0xF0674, star:0xF04CE, starline:0xF04CF, pin:0xF0403,
+  pinline:0xF0931, cog:0xF0493, layers:0xF09FE, image:0xF02E9, scissors:0xF0190, plusc:0xF0417, minusc:0xF0376,
+};
+function iconHTML(name) {
+  const cp = GLYPHS[name];
+  if (cp) return '<i class="nf">' + String.fromCodePoint(cp) + '</i>';
+  return ICONS[name] || ICONS.square;
+}
 function paintIcons(root = document) {
   root.querySelectorAll('.ic[data-icon]').forEach((e) => {
     if (e.dataset.painted) return;
@@ -520,9 +554,9 @@ reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
 (() => {
   let pts = [];
   reg({ id: 'lasso', name: 'Lasso', type: 'select', cursor: 'crosshair',
-    onPointerDown(pt, c) { pts = [pt]; c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
+    onPointerDown(pt, c) { pts = [clampToCanvas(pt, c.canvas)]; c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
     onPointerMove(pt, c) {
-      if (!pts.length || !c.overlayCtx) return; pts.push(pt); const o = c.overlayCtx; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
+      if (!pts.length || !c.overlayCtx) return; pts.push(clampToCanvas(pt, c.canvas)); const o = c.overlayCtx; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
       o.save(); o.beginPath(); o.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) o.lineTo(pts[i].x, pts[i].y);
       o.fillStyle = 'rgba(59,130,246,0.15)'; o.fill(); o.strokeStyle = '#3b82f6'; o.lineWidth = 2; o.setLineDash([5, 3]); o.stroke(); o.setLineDash([]); o.restore();
     },
@@ -537,9 +571,9 @@ reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
 (() => {
   let pts = [];
   reg({ id: 'magnetic', name: 'Magnetic Lasso', type: 'select', cursor: 'crosshair',
-    onPointerDown(pt, c) { if (aiBusy) { hud('AI is busy — one moment…'); pts = []; return; } pts = [pt]; aiPrewarm(c.canvas); c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
+    onPointerDown(pt, c) { if (aiBusy) { hud('AI is busy — one moment…'); pts = []; return; } pts = [clampToCanvas(pt, c.canvas)]; aiPrewarm(c.canvas); c.overlayCtx && c.overlayCtx.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height); },
     onPointerMove(pt, c) {
-      if (!pts.length || !c.overlayCtx) return; pts.push(pt); const o = c.overlayCtx; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
+      if (!pts.length || !c.overlayCtx) return; pts.push(clampToCanvas(pt, c.canvas)); const o = c.overlayCtx; o.clearRect(0, 0, c.overlayCanvas.width, c.overlayCanvas.height);
       o.save(); o.beginPath(); o.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) o.lineTo(pts[i].x, pts[i].y);
       o.strokeStyle = '#eaf6ff'; o.lineWidth = 2; o.shadowColor = 'rgba(150,210,255,0.9)'; o.shadowBlur = 8; o.stroke(); o.restore();
     },
@@ -577,15 +611,18 @@ reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
 //   tap    = SAM point prompt        lasso = SAM box prompt (snap) or raw outline
 //   add    = brush into the mask     remove = brush out of the mask
 let aiMode = 'tap', _lasso = null, _stroke = null, aiSnap = true;
+let eraseReview = false;   // true once an object is AI-selected → show the erase preview + action bar
+// keep lasso points on the image: out-of-bounds rides the edge instead of going chaotic (Samsung-style)
+function clampToCanvas(pt, cv) { return { x: Math.max(0, Math.min(cv.width, pt.x)), y: Math.max(0, Math.min(cv.height, pt.y)), pressure: pt.pressure }; }
 const SEL_CAP = 1280;   // selection mask works at a light resolution; scaled up to erase/draw
 reg({ id: 'airefine', name: 'AI Select', type: 'select', cursor: 'crosshair',
   onPointerDown(pt, c) {
     if (aiMode === 'tap') { aiTap(pt, c); return; }
-    if (aiMode === 'lasso') { _lasso = [pt]; strokePreview(_lasso); return; }
+    if (aiMode === 'lasso') { _lasso = [clampToCanvas(pt, c.canvas)]; strokePreview(_lasso); return; }
     pushUndo(); _stroke = blankSelMask(c.canvas, true); strokePaint(pt, c, aiMode === 'remove'); strokePreview();
   },
   onPointerMove(pt, c) {
-    if (aiMode === 'lasso' && _lasso) { _lasso.push(pt); strokePreview(_lasso); }
+    if (aiMode === 'lasso' && _lasso) { _lasso.push(clampToCanvas(pt, c.canvas)); strokePreview(_lasso); }
     else if ((aiMode === 'add' || aiMode === 'remove') && _stroke) { strokePaint(pt, c, aiMode === 'remove'); strokePreview(); }
   },
   onPointerUp(pt, c) {
@@ -1605,10 +1642,21 @@ function maskRing(maskCanvas, r) {
   g.globalCompositeOperation = 'source-in'; g.fillStyle = '#eaf6ff'; g.fillRect(0, 0, c.width, c.height);
   return c;
 }
-// the "magic" neon-white segmentation highlight (soft fill + glowing edge)
+// erase PREVIEW — paint the selected region as a transparency checkerboard so the
+// user sees what "erase" will look like before committing (Samsung-style).
+function drawErasePreview(octx, maskCanvas) {
+  const W = octx.canvas.width, H = octx.canvas.height, t = 16;
+  const tmp = document.createElement('canvas'); tmp.width = W; tmp.height = H; const g = tmp.getContext('2d');
+  g.fillStyle = '#f1f3f6'; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#c3c7d0';
+  for (let y = 0; y < H; y += t) for (let x = 0; x < W; x += t) if (((((x / t) | 0) + ((y / t) | 0)) & 1) === 0) g.fillRect(x, y, t, t);
+  g.globalCompositeOperation = 'destination-in'; g.drawImage(maskCanvas, 0, 0, W, H);   // keep only the selected region
+  octx.save(); octx.globalAlpha = 0.92; octx.drawImage(tmp, 0, 0); octx.restore();
+}
+// the "magic" neon-white segmentation highlight (soft fill + glowing edge).
+// Does NOT clear the overlay — renderSelection clears first, so a checker preview can sit underneath.
 function drawNeonSelection(octx, maskCanvas) {
   const W = octx.canvas.width, H = octx.canvas.height;
-  octx.clearRect(0, 0, W, H);
   octx.save();
   octx.globalAlpha = 0.16; octx.drawImage(tintMask(maskCanvas, '180,222,255'), 0, 0);   // faint inner fill
   octx.restore();
@@ -1683,6 +1731,7 @@ function renderSelection() {
   if (s.type === 'aimask' && s.mask) {
     const full = document.createElement('canvas'); full.width = overlayCanvas.width; full.height = overlayCanvas.height;
     full.getContext('2d').drawImage(s.mask, 0, 0, full.width, full.height);
+    if (eraseReview) drawErasePreview(octx, full);   // show the erase result underneath the neon outline
     drawNeonSelection(octx, full);
   } else if (s.type === 'lasso' && s.points && s.points.length > 1) {
     octx.save(); octx.beginPath(); octx.moveTo(s.points[0].x, s.points[0].y);
@@ -1721,7 +1770,7 @@ async function aiTap(pt, c) {                          // SAM point prompt
     const key = doc('activeLayerId') + ':' + c.canvas.width + 'x' + c.canvas.height;
     const { mask, any } = await selectAt(c.canvas, pt.x, pt.y, key, (s) => hud(s));
     if (!any) { hud('No object found there — aim for its centre'); return; }
-    compositeSel(mask, selMode(), c.canvas); hud('Selected ✨ — refine, or Erase');
+    eraseReview = true; compositeSel(mask, selMode(), c.canvas); hud('Selected ✨ — refine, or Erase');
   } catch (e) { console.error(e); hud('Wand failed — ' + (e.message || e)); }
   finally { aiBusy = false; }
 }
@@ -1746,7 +1795,7 @@ async function aiLassoCommit(pts, c, snap = aiSnap) {  // lasso -> SAM object sn
     } catch (e) { console.error(e); drawLassoInto(incoming, pts, c); hud('AI snap failed — kept your outline'); }
     finally { aiBusy = false; }
   } else { drawLassoInto(incoming, pts, c); }
-  compositeSel(incoming, selMode(), c.canvas);
+  eraseReview = true; compositeSel(incoming, selMode(), c.canvas);
 }
 function selectionToMask(sel, W, H) {                   // -> layer-size HARD-edged mask
   if (!sel) return null;
@@ -1765,7 +1814,35 @@ function selectionToMask(sel, W, H) {                   // -> layer-size HARD-ed
   g.putImageData(id, 0, 0);
   return m;
 }
-function aiClearSel() { if (doc('selection')) { pushUndo(); setSelection(null); } }
+function aiClearSel() { eraseReview = false; if (doc('selection')) { pushUndo(); setSelection(null); } else updateEraseBar(); }
+
+/* ---- Object-eraser staged action bar: Undo/Redo · Add/Remove refine · Erase CTA ---- */
+function initEraseBar() {
+  const bar = $('#erasebar'); if (!bar) return;
+  $('#eb-undo').onclick = () => History.undo();
+  $('#eb-redo').onclick = () => History.redo();
+  const setRefine = (mode) => {
+    eraseReview = true; aiMode = mode; setSession('tool', 'airefine');
+    hud(mode === 'add' ? 'Add — brush over what to include' : 'Remove — brush over what to drop');
+    updateEraseBar();
+  };
+  $('#eb-add').onclick = () => setRefine('add');
+  $('#eb-remove').onclick = () => setRefine('remove');
+  $('#eb-cancel').onclick = () => { aiClearSel(); hud('Selection cleared'); };
+  $('#eb-erase').onclick = () => aiMagicErase();
+  paintIcons(bar);
+  updateEraseBar();
+}
+function updateEraseBar() {
+  const bar = $('#erasebar'); if (!bar) return;
+  const hasSel = !!doc('selection');
+  if (!hasSel) eraseReview = false;
+  bar.classList.toggle('on', hasSel);
+  const undo = $('#eb-undo'), redo = $('#eb-redo'); if (undo) undo.disabled = !session('canUndo'); if (redo) redo.disabled = !session('canRedo');
+  const refining = session('tool') === 'airefine';
+  $('#eb-add').classList.toggle('on', refining && aiMode === 'add');
+  $('#eb-remove').classList.toggle('on', refining && aiMode === 'remove');
+}
 async function aiMagicErase() {
   if (aiBusy) { hud('Hold on — the AI is still working…'); return; }
   const aid = doc('activeLayerId'); const cv = layerCanvases.get(aid);
@@ -1912,7 +1989,8 @@ function boot() {
   bind(P.doc, () => { const W = doc('width'), H = doc('height'); $('#artboard').style.width = W + 'px'; $('#artboard').style.height = H + 'px'; });
 
   buildLeft(); buildRight(); buildTop(); buildBottom(); buildAssets();
-  initEngine(); initShell(); initStick();
+  initEngine(); initShell(); initStick(); initEraseBar();
+  bind(P.doc, updateEraseBar); bind(P.session, updateEraseBar);   // bar follows selection + tool/undo state
   paintIcons();
 
   History.clear(); pushUndo();

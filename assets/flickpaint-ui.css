@@ -97,8 +97,11 @@ body[data-view="right"]  #stage { transform: translateX(-7%); filter: brightness
 body[data-view="bottom"] #stage { transform: translateY(-7%); filter: brightness(.7); }
 
 /* ===== Icons ===== */
-.ic { width: 20px; height: 20px; display: inline-block; flex: none; vertical-align: middle; }
+/* Icons are Cascadia Code NF (Nerd Font) glyphs rendered as text via <i class="nf">.
+   The glyph size tracks the .ic font-size; legacy inline SVG (.ic svg) still works. */
+.ic { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; flex: none; vertical-align: middle; line-height: 1; font-size: 19px; }
 .ic svg { width: 100%; height: 100%; display: block; }
+.nf { font-family: 'CascadiaCode', 'Symbols Nerd Font', monospace; font-style: normal; font-weight: 400; font-size: inherit; line-height: 1; display: inline-block; }
 
 /* ===== Dismiss overlay ===== */
 #dismiss { position: absolute; inset: 0; z-index: 10; display: none; }
@@ -111,7 +114,7 @@ body:not([data-view="center"]) #dismiss { display: block; }
   color: rgba(var(--fg-rgb),0.5); transition: all .2s; box-shadow: 0 10px 30px rgba(0,0,0,.4);
 }
 .tab:hover { color: var(--fg); }
-.tab .ic { width: 16px; height: 16px; }
+.tab .ic { width: 16px; height: 16px; font-size: 15px; }
 .tab.bottom { bottom: 0; left: 50%; transform: translateX(-50%); width: 80px; height: 24px; border-radius: 12px 12px 0 0; }
 .tab.left   { left: 0; top: 50%; transform: translateY(-50%); width: 24px; height: 80px; border-radius: 0 12px 12px 0; }
 .tab.right  { right: 0; top: 50%; transform: translateY(-50%); width: 24px; height: 80px; border-radius: 12px 0 0 12px; }
@@ -163,7 +166,7 @@ body[data-view="top"] #blind { height: 168px; }
   font-size: 10px; transition: all .12s; }
 .gridbtn:hover { background: rgba(var(--fg-rgb),0.1); color: var(--fg); }
 .gridbtn.on, .gridbtn.active { background: var(--accent-grad); color: var(--fg); border-color: transparent; box-shadow: var(--glow); }
-.gridbtn .ic { width: 16px; height: 16px; }
+.gridbtn .ic { width: 16px; height: 16px; font-size: 16px; }
 .btn-soft.on, .btn-soft.active { background: var(--accent-grad); color: var(--fg); box-shadow: var(--glow); }
 
 h3.section { font-size: 10px; font-weight: 800; color: rgba(var(--fg-rgb),0.3); text-transform: uppercase; letter-spacing: .08em; padding-left: 4px; }
@@ -251,6 +254,31 @@ input:focus { border-color: rgba(var(--fg-rgb),0.3); }
 
 /* mode badge */
 #mode { position: absolute; bottom: 8px; left: 8px; z-index: 5; font-size: 10px; color: rgba(var(--fg-rgb),0.35); pointer-events: none; }
+
+/* ===== Object-eraser / selection action bar — the staged Samsung-style loop ===== */
+#erasebar {
+  position: fixed; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(150%);
+  z-index: 80; display: none; align-items: center; gap: 6px; padding: 6px; border-radius: 18px;
+  transition: transform .3s cubic-bezier(.2,.85,.25,1), opacity .2s; opacity: 0; max-width: calc(100vw - 24px);
+}
+#erasebar.on { display: flex; transform: translateX(-50%) translateY(0); opacity: 1; }
+#erasebar .eb { display: flex; align-items: center; justify-content: center; gap: 7px; height: 46px; padding: 0 16px; border-radius: 13px;
+  background: rgba(var(--fg-rgb),0.06); color: rgba(var(--fg-rgb),0.85); font-size: 13px; font-weight: 700; white-space: nowrap; transition: background .15s, filter .15s, color .15s; }
+#erasebar .eb:hover { background: rgba(var(--fg-rgb),0.12); color: var(--fg); }
+#erasebar .eb:disabled { opacity: .3; }
+#erasebar .eb .ic { width: 20px; height: 20px; }
+#erasebar .eb.icon { width: 46px; padding: 0; }
+#erasebar .eb.on { background: var(--accent-grad); color: #fff; box-shadow: var(--glow); }
+#erasebar .eb.cta { background: var(--accent-grad); color: #fff; box-shadow: var(--glow); padding: 0 24px; }
+#erasebar .eb.cta:hover { filter: brightness(1.08); }
+#erasebar .ebseg { display: flex; gap: 3px; padding: 3px; border-radius: 15px; background: rgba(var(--fg-rgb),0.06); }
+#erasebar .ebseg .eb { height: 40px; }
+#erasebar .ebsep { width: 1px; height: 26px; background: rgba(var(--fg-rgb),0.15); margin: 0 2px; }
+@media (pointer: fine) {            /* densify for a mouse — touch keeps the big targets */
+  #erasebar .eb { height: 36px; font-size: 12px; padding: 0 13px; }
+  #erasebar .eb.icon { width: 36px; }
+  #erasebar .ebseg .eb { height: 32px; }
+}
 
 .muted { color: rgba(var(--fg-rgb),0.4); }
 .btn-primary { background: var(--accent-grad); color: var(--fg); border-radius: 10px; padding: 9px; font-weight: 700; font-size: 12px; width: 100%; box-shadow: var(--glow); transition: filter .15s; }
