@@ -61,18 +61,22 @@ async function ensureModel(onStatus) {
     const T = await import(/* @vite-ignore */ CDN);
     T.env.allowLocalModels = false;             // always pull from the Hub/CDN
     const dtype = device === 'webgpu' ? 'fp32' : 'q8';   // light weights on mobile WASM
-    let lastPct = -1;
+    // The model can ship as several files, each reporting progress 0→100% — funneling
+    // that into one bar looks like multiple downloads. Aggregate by bytes into one bar.
+    const _dl = new Map(); let lastPct = -1;
     const progress_callback = (p) => {
-      if (!onStatus) return;
-      if (p.status === 'progress' && typeof p.progress === 'number') {
-        const pct = Math.round(p.progress);
-        if (pct !== lastPct) { lastPct = pct; onStatus(`downloading AI model ${pct}%`); }
-      } else if (p.status === 'ready' || p.status === 'done') {
-        onStatus('AI ready');
-      }
+      if (!onStatus || !p || !p.file) return;
+      if (p.status === 'progress' && typeof p.loaded === 'number' && typeof p.total === 'number' && p.total > 0) _dl.set(p.file, { loaded: p.loaded, total: p.total });
+      else if (p.status === 'done' && _dl.has(p.file)) { const e = _dl.get(p.file); _dl.set(p.file, { loaded: e.total, total: e.total }); }
+      else if (p.status === 'ready') { onStatus('AI ready'); return; }
+      else return;
+      let l = 0, t = 0; for (const v of _dl.values()) { l += v.loaded; t += v.total; }
+      if (t <= 0) return;
+      const pct = Math.min(100, Math.round(l / t * 100));
+      if (pct !== lastPct) { lastPct = pct; onStatus(`downloading AI model ${pct}%`); }
     };
     const model = await T.AutoModel.from_pretrained(MODEL, { device, dtype, progress_callback });
-    const processor = await T.AutoProcessor.from_pretrained(MODEL);
+    const processor = await T.AutoProcessor.from_pretrained(MODEL, { progress_callback });
     return { T, model, processor, device };
   })().catch((e) => { _ready = null; throw e; });   // allow retry after a failure
   return _ready;

@@ -47,11 +47,22 @@ async function ensure(onStatus) {
     const T = await import(/* @vite-ignore */ CDN);
     T.env.allowLocalModels = false;
     const dtype = device === 'webgpu' ? 'fp32' : 'q8';   // SlimSAM has no fp16 export -> fp32 on webgpu
+    // SlimSAM ships as several files (vision encoder + mask decoder); Transformers.js
+    // fires progress PER FILE, each sweeping 0→100% — which looks like the model is
+    // downloading twice. Aggregate by bytes across every file into one smooth bar.
+    const _dl = new Map(); let _lastPct = -1;
     const progress_callback = (p) => {
-      if (onStatus && p.status === 'progress' && typeof p.progress === 'number') onStatus(`downloading wand ${Math.round(p.progress)}%`);
+      if (!onStatus || !p || !p.file) return;
+      if (p.status === 'progress' && typeof p.loaded === 'number' && typeof p.total === 'number' && p.total > 0) _dl.set(p.file, { loaded: p.loaded, total: p.total });
+      else if (p.status === 'done' && _dl.has(p.file)) { const e = _dl.get(p.file); _dl.set(p.file, { loaded: e.total, total: e.total }); }
+      else return;
+      let l = 0, t = 0; for (const v of _dl.values()) { l += v.loaded; t += v.total; }
+      if (t <= 0) return;
+      const pct = Math.min(100, Math.round(l / t * 100));
+      if (pct !== _lastPct) { _lastPct = pct; onStatus(`downloading wand ${pct}%`); }
     };
     const model = await T.SamModel.from_pretrained(MODEL, { device, dtype, progress_callback });
-    const processor = await T.AutoProcessor.from_pretrained(MODEL);
+    const processor = await T.AutoProcessor.from_pretrained(MODEL, { progress_callback });
     return { T, model, processor };
   })().catch((e) => { _ready = null; throw e; });
   return _ready;
