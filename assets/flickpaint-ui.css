@@ -185,6 +185,15 @@ input:focus { border-color: rgba(var(--fg-rgb),0.3); }
 .toolcell.on, .toolcell.active { background: #fff; color: var(--indigo); transform: scale(1.05); box-shadow: 0 4px 12px rgba(var(--fg-rgb),.25), var(--glow); z-index: 2; font-weight: 600; }
 .toolcell span { font-size: 9px; }
 .toolcell .ic { width: 20px; height: 20px; }
+/* AI-powered tools get a flourish: a faint cyan ring + a sparkle badge, so they read
+   as part of the toolset (not a separate panel) while staying distinguishable. */
+.toolcell.ai { box-shadow: inset 0 0 0 1px rgba(140,224,255,0.22); }
+.toolcell.ai:hover { box-shadow: inset 0 0 0 1px rgba(140,224,255,0.4); }
+.toolcell.ai::after { content: '\F0674'; font-family: 'CascadiaCode', monospace; font-style: normal;
+  position: absolute; top: 3px; right: 4px; font-size: 9px; line-height: 1; color: #8be0ff;
+  text-shadow: 0 0 6px rgba(140,224,255,0.75); pointer-events: none; }
+.toolcell.ai.on { box-shadow: inset 0 0 0 1px rgba(91,139,245,0.5), 0 4px 12px rgba(var(--fg-rgb),.25), var(--glow); }
+.toolcell.ai.on::after { color: var(--indigo); text-shadow: none; }
 .grid3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; }
 .toolwrap { display: flex; flex-wrap: wrap; gap: 6px; }       /* flex-wrap toolboxes (match brushes/colors) */
 .toolwrap .toolcell { width: 64px; flex: 0 0 auto; }

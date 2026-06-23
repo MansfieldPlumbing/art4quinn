@@ -199,6 +199,8 @@ const CATALOG = {
       { id: 'select', icon: 'select', label: 'Select' },
       { id: 'lasso', icon: 'lasso', label: 'Lasso' },
       { id: 'magic', icon: 'wand', label: 'Magic' },
+      { id: 'airefine', icon: 'target', label: 'AI Select', ai: true },
+      { id: 'magnetic', icon: 'lasso', label: 'AI Lasso', ai: true },
       { id: 'crop', icon: 'crop', label: 'Crop' },
     ]},
     { title: 'Paint', tools: [
@@ -577,7 +579,7 @@ reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
       o.save(); o.beginPath(); o.moveTo(pts[0].x, pts[0].y); for (let i = 1; i < pts.length; i++) o.lineTo(pts[i].x, pts[i].y);
       o.strokeStyle = '#eaf6ff'; o.lineWidth = 2; o.shadowColor = 'rgba(150,210,255,0.9)'; o.shadowBlur = 8; o.stroke(); o.restore();
     },
-    onPointerUp(pt, c) { if (pts.length < 3) { pts = []; renderSelection(); return; } const p = pts; pts = []; aiLassoCommit(p, c, true); } });   // force SAM object snap
+    onPointerUp(pt, c) { if (pts.length < 3) { pts = []; renderSelection(); return; } const p = pts; pts = []; aiLassoCommit(p, c, aiSnap); } });   // AI snap toggle governs (default on)
 })();
 
 reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
@@ -976,10 +978,9 @@ function buildLeft() {
   $('#pane-tools').innerHTML = cats.map((cat) => `
     <h3 class="section" style="margin:10px 0 6px">${cat.title}</h3>
     <div class="toolwrap">${cat.tools.map((t) => `
-      <button class="toolcell" data-tool="${t.id}" title="${t.label}">${icon(t.icon)}<span>${t.label}</span></button>`).join('')}</div>`).join('') + `
+      <button class="toolcell${t.ai ? ' ai' : ''}" data-tool="${t.id}" title="${t.label}">${icon(t.icon)}<span>${t.label}</span></button>`).join('')}</div>`).join('') + `
     <h3 class="section" style="margin:14px 0 6px">Selection</h3>
-    <button class="btn-soft" id="sel-magnetic" style="width:100%;margin-bottom:7px" title="Magnetic Lasso — drag around an object, the line clings to its edges">🧲 Magnetic Lasso</button>
-    <p class="muted" style="font-size:10px;margin:0 2px 7px;line-height:1.5">Hold <b>Shift</b> to add · <b>Alt</b> to subtract</p>
+    <p class="muted" style="font-size:10px;margin:0 2px 8px;line-height:1.5">Hold <b>Shift</b> to add · <b>Alt</b> to subtract. Tools marked <b style="color:#8be0ff">✦</b> are AI-powered.</p>
     <div class="row" style="gap:6px">
       <button class="btn-soft" id="sel-invert" style="flex:1" title="Invert (Ctrl+Shift+I)">Invert</button>
       <button class="btn-soft" id="sel-grow" style="flex:1" title="Grow">Grow</button>
@@ -989,26 +990,16 @@ function buildLeft() {
       <button class="btn-soft" id="sel-feather" style="flex:1" title="Soften the edge">Feather</button>
       <button class="btn-soft" id="sel-none" style="flex:1" title="Deselect (Ctrl+D)">Deselect</button>
     </div>
-    <h3 class="section" style="margin:14px 0 6px">AI Eraser</h3>
-    <div class="toolwrap" id="ai-modes">
-      <button class="toolcell" data-aimode="tap" title="Tap an object — AI selects it"><span style="font-size:18px">🪄</span><span>Tap</span></button>
-      <button class="toolcell" data-aimode="lasso" title="Lasso roughly — AI snaps to the object"><span style="font-size:18px">✏️</span><span>Lasso</span></button>
-      <button class="toolcell" data-aimode="add" title="Brush to add to the selection"><span style="font-size:18px">➕</span><span>Add</span></button>
-      <button class="toolcell" data-aimode="remove" title="Brush to erase from the selection"><span style="font-size:18px">➖</span><span>Remove</span></button>
-    </div>
-    <button class="toolcell on" id="ai-snap" style="width:100%;flex-direction:row;gap:8px;justify-content:center;margin-top:8px" title="When on, Tap/Lasso snap to the object with AI. Off = raw outline."><span style="font-size:15px">🧲</span><span>AI snap: on</span></button>
-    <button class="btn-primary" id="ai-erase" style="margin-top:10px">🩹 Erase selection</button>
+    <button class="toolcell ai on" id="ai-snap" style="width:100%;flex-direction:row;gap:8px;justify-content:center;margin-top:10px" title="When on, the AI Select / AI Lasso tools snap to the object. Off = raw point/outline."><span class="ic" data-icon="ai"></span><span>AI snap: on</span></button>
+    <button class="btn-primary" id="ai-erase" style="margin-top:8px"><span class="ic" data-icon="ai" style="width:15px;height:15px;font-size:15px;vertical-align:-3px"></span> Erase selection</button>
     <div class="row" style="margin-top:6px;gap:6px">
-      <button class="btn-soft" id="ai-bg" style="flex:2">✂️ Erase background</button>
+      <button class="btn-soft" id="ai-bg" style="flex:2">Erase background</button>
       <button class="btn-soft" id="ai-clear" style="flex:1" title="Clear selection">Clear</button>
     </div>
-    <p class="muted" style="font-size:10px;margin:8px 2px 0;line-height:1.5">Undo/redo (↶↷ up top) covers selections too.</p>
-    <button id="ai-about" class="muted" style="display:flex;align-items:center;gap:6px;margin:8px 2px 0;font-size:10px;background:none;text-align:left;width:100%"><span>ℹ️</span><span>How the AI tools work</span></button>`;
-  $('#pane-tools').querySelectorAll('[data-tool]').forEach((b) => b.onclick = () => setSession('tool', b.dataset.tool));
-  const aiModeBtns = [...$('#pane-tools').querySelectorAll('[data-aimode]')];
-  aiModeBtns.forEach((b) => b.onclick = () => {
-    aiMode = b.dataset.aimode; setSession('tool', 'airefine');
-    aiModeBtns.forEach((x) => x.classList.toggle('on', x === b));
+    <button id="ai-about" class="muted" style="display:flex;align-items:center;gap:6px;margin:9px 2px 0;font-size:10px;background:none;text-align:left;width:100%"><span class="ic" data-icon="robot" style="width:13px;height:13px;font-size:13px"></span><span>How the AI tools work</span></button>`;
+  $('#pane-tools').querySelectorAll('[data-tool]').forEach((b) => b.onclick = () => {
+    if (b.dataset.tool === 'airefine') aiMode = 'tap';   // tap-to-select is the default AI mode
+    setSession('tool', b.dataset.tool);
   });
   $('#ai-snap').onclick = () => { aiSnap = !aiSnap; $('#ai-snap').classList.toggle('on', aiSnap); $('#ai-snap').querySelector('span:last-child').textContent = 'AI snap: ' + (aiSnap ? 'on' : 'off'); };
   $('#ai-clear').onclick = () => aiClearSel();
@@ -1020,7 +1011,6 @@ function buildLeft() {
   $('#sel-shrink').onclick = () => selExpand(-4);
   $('#sel-feather').onclick = () => selFeather(3);
   $('#sel-none').onclick = () => deselect();
-  $('#sel-magnetic').onclick = () => setSession('tool', 'magnetic');
 
   // Brushes
   const brushes = Sys.registry.Resolve('\\Catalog\\Brushes');
@@ -1046,7 +1036,6 @@ function buildLeft() {
   bind(P.session, () => {
     const tool = session('tool');
     p.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === tool));
-    if (tool !== 'airefine') p.querySelectorAll('[data-aimode]').forEach((b) => b.classList.remove('on'));
     p.querySelectorAll('[data-color]').forEach((b) => b.classList.toggle('on', b.dataset.color === session('color')));
     lsSize.value = session('brushSize'); $('#ls-size-v').textContent = session('brushSize') + 'px';
     lsOp.value = session('opacity'); $('#ls-op-v').textContent = session('opacity') + '%';
