@@ -132,10 +132,13 @@
     <h3 class="section" style="margin-bottom:8px">Silhouette</h3>
     <button class="btn-soft" id="aicut" title="Use AI to cut the subject from any background"
             style="width:100%;margin-bottom:16px">✨ AI cut-out</button>
-    <h3 class="section" style="margin-bottom:8px">Volume</h3>
-    <label class="field-label">Puff <span id="puffVal" class="mono" style="float:right;color:#fff">50%</span></label>
-    <input type="range" id="puff" min="0" max="100" value="50" style="width:100%;margin-bottom:16px"
-           title="Inflate the flat cut-out into a rounded body — closes the edge seam">
+    <h3 class="section" style="margin-bottom:8px">Shape</h3>
+    <label class="field-label">Edge <span id="bevelVal" class="mono" style="float:right;color:#fff">40%</span></label>
+    <input type="range" id="bevel" min="0" max="100" value="40" style="width:100%;margin-bottom:12px"
+           title="Round the outline — kills the crusty hard rim. Stays flat; just softens the edge.">
+    <label class="field-label">Puff <span id="puffVal" class="mono" style="float:right;color:#fff">0%</span></label>
+    <input type="range" id="puff" min="0" max="100" value="0" style="width:100%;margin-bottom:16px"
+           title="Optional volume — inflate the flat shape into a rounded body. Leave at 0 to stay 2D.">
     <h3 class="section" style="margin-bottom:8px">Floor
       <span id="measure" class="mono" style="font-weight:400;text-transform:none;letter-spacing:0;color:rgba(255,255,255,0.5)"></span>
     </h3>

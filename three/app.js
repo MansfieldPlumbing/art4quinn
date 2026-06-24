@@ -18,7 +18,8 @@ const EDGE_DEPTH    = 0.004;  // hairline rim left at the outline so the mesh st
 const MAX_TEX       = 1024;
 const BG_TOL        = 46;
 const ISLAND_FRAC   = 0.03;   // drop silhouette islands smaller than 3% of the biggest part
-let   puffAmt       = 0.5;    // 0 = flat die-cut, 1 = fully inflated pillow (driven by the "Puff" slider)
+let   puffAmt       = 0.0;    // body volume: 0 = stays flat 2D, 1 = fully inflated pillow ("Puff")
+let   bevelAmt      = 0.4;    // edge rounding: 0 = tight crisp edge, 1 = broad soft round ("Edge")
 
 // ---------------------------------------------------------------- scene
 const viewport = document.getElementById('viewport');
@@ -234,15 +235,21 @@ function buildGeometry(mask) {
   for (let i = 0; i < gw * gh; i++) if (dist[i] < INF && dist[i] > maxD) maxD = dist[i];
   const puffRef = Math.max(1, maxD);
 
-  // Half-thickness at a grid *vertex*. Averaging the 4 touching cells (empty = 0)
-  // makes it fall to ~EDGE_DEPTH right at the outline and swell in the belly; sqrt()
-  // gives a rounded, balloon-like cross-section. puffAmt blends flat-slab → pillow.
-  const eDepth = REL_DEPTH * (1 - 0.92 * puffAmt);              // rim collapses as you puff
-  const bDepth = REL_DEPTH + (MAX_PUFF - REL_DEPTH) * puffAmt;  // belly swells as you puff
+  // Half-thickness at a grid *vertex*. Two independent knobs:
+  //   • body(t): the face thickness. Flat (constant REL_DEPTH) at puff 0, so the
+  //     model stays a 2D standee; bulges toward `belly` in the middle as you puff.
+  //   • rim: a smoothstep that rounds the outline edge down to a hairline over a
+  //     band `bevelW` wide — this is what replaces the crusty hard wall. It runs
+  //     at ANY puff, so you can have a flat shape with clean soft edges.
+  const belly  = REL_DEPTH + (MAX_PUFF - REL_DEPTH) * puffAmt;  // mid thickness when puffed
+  const bevelW = 0.04 + 0.56 * bevelAmt;                        // edge-round width (frac. of depth-to-core)
   const vDepth = (gx, gy) => {
     const dd = (dAt(gx - 1, gy - 1) + dAt(gx, gy - 1) + dAt(gx - 1, gy) + dAt(gx, gy)) * 0.25;
-    const dome = Math.sqrt(Math.min(1, dd / puffRef));
-    return eDepth + (bDepth - eDepth) * dome;
+    const t = Math.min(1, dd / puffRef);                       // 0 at outline → 1 in the core
+    const body = REL_DEPTH + (belly - REL_DEPTH) * t;          // flat at puff 0, domed when puffed
+    const x = Math.min(1, t / bevelW);
+    const rim = x * x * (3 - 2 * x);                           // smoothstep: soften the outline
+    return EDGE_DEPTH + (body - EDGE_DEPTH) * rim;
   };
 
   const pos = [], uv = [], nor = [], col = [];
@@ -557,7 +564,12 @@ function syncTool() {
   $('color').value = tool.color;
   document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', !tool.erase && s.dataset.c.toLowerCase() === tool.color.toLowerCase()));
 }
-// Puff: inflate the flat cut-out into a rounded body and close the rim seam, live.
+// Edge: round the crusty rim (stays flat). Puff: optional volume. Both re-extrude live.
+$('bevel').addEventListener('input', (e) => {
+  bevelAmt = +e.target.value / 100;
+  $('bevelVal').textContent = e.target.value + '%';
+  reextrude();
+});
 $('puff').addEventListener('input', (e) => {
   puffAmt = +e.target.value / 100;
   $('puffVal').textContent = e.target.value + '%';
