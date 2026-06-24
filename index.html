@@ -6,11 +6,16 @@
 <title>A4Q · art4quinn</title>
 <meta name="description" content="art4quinn — Quinn's studio for drawing, sculpting in 3D, and her gallery." />
 
-<!-- Evict the dead "Magic Eraser" PWA service worker + caches so the new site is served. -->
-<script>
-  if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(()=>{});
-  if (window.caches && caches.keys) caches.keys().then(ks => ks.forEach(k => caches.delete(k))).catch(()=>{});
-</script>
+<!-- Installable PWA -->
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#0f1118" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="art4quinn" />
+<link rel="apple-touch-icon" href="assets/icons/icon-180.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png" />
+<script src="assets/pwa-register.js"></script>
 
 <style>
   @font-face{ font-family:'Selawik'; src:url('paint/assets/fonts/selawk.ttf') format('truetype'); font-weight:100 900; font-display:swap; }
