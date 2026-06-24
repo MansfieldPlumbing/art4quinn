@@ -1,9 +1,9 @@
 {
-  "name": "Pro Paint Shop",
-  "short_name": "Paint Shop",
-  "description": "A fast, installable on-device paint studio with AI select & erase.",
-  "id": "./paint/",
-  "start_url": "paint/",
+  "name": "art4quinn",
+  "short_name": "art4quinn",
+  "description": "Quinn's studio — draw, sculpt in 3D, and browse the gallery. Fast, on-device, installable.",
+  "id": "/",
+  "start_url": ".",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
@@ -13,5 +13,10 @@
     { "src": "assets/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "assets/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "assets/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Draw", "short_name": "Draw", "url": "paint/", "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Studio", "short_name": "Studio", "url": "three/", "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Gallery", "short_name": "Gallery", "url": "gallery.html", "icons": [{ "src": "assets/icons/icon-192.png", "sizes": "192x192" }] }
   ]
 }

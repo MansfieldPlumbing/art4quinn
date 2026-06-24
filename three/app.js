@@ -12,10 +12,16 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 // ---------------------------------------------------------------- tuning
 const TARGET_HEIGHT = 2.4;
 const GRID_LONG     = 150;
-const REL_DEPTH     = 0.05;
+const REL_DEPTH     = 0.05;   // flat-slab half-thickness (the look at puff = 0)
+const MAX_PUFF      = 0.34;   // belly half-thickness at full puff — a rounded body, not a slab
+const EDGE_DEPTH    = 0.004;  // hairline rim left at the outline so the mesh stays closed (kills the seam)
 const MAX_TEX       = 1024;
 const BG_TOL        = 46;
 const ISLAND_FRAC   = 0.03;   // drop silhouette islands smaller than 3% of the biggest part
+let   puffAmt       = 0.0;    // body volume: 0 = stays flat 2D, 1 = fully inflated pillow ("Puff")
+let   bevelAmt      = 0.4;    // edge rounding: 0 = tight crisp edge, 1 = broad soft round ("Edge")
+let   useDepth      = false;  // when on, real AI depth drives the relief instead of a uniform bulge
+let   DEPTH         = null;   // { w, h, data:Float32Array(0..1) } normalised depth for the current character
 
 // ---------------------------------------------------------------- scene
 const viewport = document.getElementById('viewport');
@@ -135,7 +141,17 @@ function processImage(img) {
   for (let p = 0; p < w * h; p++) {
     const i = p * 4;
     out.data[i] = px[i]; out.data[i + 1] = px[i + 1]; out.data[i + 2] = px[i + 2];
-    out.data[i + 3] = isBg[p] ? 0 : 255;
+    // Antialias the cut edge: alpha = fraction of the 3x3 neighbourhood that is
+    // foreground, so the binary flood-fill boundary becomes a 1px gradient that
+    // MSAA/alphaToCoverage can resolve (kills the staircase on the silhouette).
+    const x = p % w, y = (p - x) / w;
+    let fg = 0, tot = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      tot++; if (!isBg[ny * w + nx]) fg++;
+    }
+    out.data[i + 3] = Math.round(255 * fg / tot);
   }
   bctx.putImageData(out, 0, 0);
   return { w, h, isBg, base };
@@ -159,7 +175,9 @@ async function processImageAI(img) {
     const mx = Math.min(m.width - 1, Math.floor((x + 0.5) / w * m.width));
     const my = Math.min(m.height - 1, Math.floor((y + 0.5) / h * m.height));
     const p = y * w + x;
-    if (m.data[my * m.width + mx] < 128) { isBg[p] = 1; d[p * 4 + 3] = 0; } else { d[p * 4 + 3] = 255; }
+    const a = m.data[my * m.width + mx];          // RMBG gives a soft 0..255 matte
+    isBg[p] = a < 128 ? 1 : 0;                     // binary for geometry occupancy
+    d[p * 4 + 3] = a;                              // but keep the soft alpha → antialiased edge
   }
   bctx.putImageData(id, 0, 0);
   return { w, h, isBg, base };
@@ -208,8 +226,54 @@ function buildGeometry(mask) {
   }
   const occAt = (gx, gy) => (gx < 0 || gy < 0 || gx >= gw || gy >= gh) ? 0 : occ[gy * gw + gx];
 
+  // ---- inflation height field: chamfer distance transform of the silhouette ----
+  // dist[cell] = distance (in grid cells) to the nearest background — small at the
+  // outline, large in the belly. Out-of-bounds counts as background (dist 0), so a
+  // silhouette that touches the image edge still tapers correctly.
+  const INF = 1e9;
+  const dist = new Float32Array(gw * gh);
+  for (let i = 0; i < gw * gh; i++) dist[i] = occ[i] ? INF : 0;
+  const dAt = (x, y) => (x < 0 || y < 0 || x >= gw || y >= gh) ? 0 : dist[y * gw + x];
+  const CA = 1, CB = Math.SQRT2;
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++) {
+    if (!occ[gy * gw + gx]) continue;
+    dist[gy * gw + gx] = Math.min(dist[gy * gw + gx],
+      dAt(gx - 1, gy) + CA, dAt(gx, gy - 1) + CA, dAt(gx - 1, gy - 1) + CB, dAt(gx + 1, gy - 1) + CB);
+  }
+  for (let gy = gh - 1; gy >= 0; gy--) for (let gx = gw - 1; gx >= 0; gx--) {
+    if (!occ[gy * gw + gx]) continue;
+    dist[gy * gw + gx] = Math.min(dist[gy * gw + gx],
+      dAt(gx + 1, gy) + CA, dAt(gx, gy + 1) + CA, dAt(gx + 1, gy + 1) + CB, dAt(gx - 1, gy + 1) + CB);
+  }
+  let maxD = 0;
+  for (let i = 0; i < gw * gh; i++) if (dist[i] < INF && dist[i] > maxD) maxD = dist[i];
+  const puffRef = Math.max(1, maxD);
+
+  // Half-thickness at a grid *vertex*. Two independent knobs:
+  //   • body(t): the face thickness. Flat (constant REL_DEPTH) at puff 0, so the
+  //     model stays a 2D standee; bulges toward `belly` in the middle as you puff.
+  //   • rim: a smoothstep that rounds the outline edge down to a hairline over a
+  //     band `bevelW` wide — this is what replaces the crusty hard wall. It runs
+  //     at ANY puff, so you can have a flat shape with clean soft edges.
+  const belly  = REL_DEPTH + (MAX_PUFF - REL_DEPTH) * puffAmt;  // mid thickness when puffed
+  const bevelW = 0.04 + 0.56 * bevelAmt;                        // edge-round width (frac. of depth-to-core)
+  // Real-depth mode: sample the AI depth map (0..1, higher = closer) per grid vertex,
+  // so the belly follows the character's actual relief instead of a uniform bulge.
+  const depthAt = (useDepth && DEPTH) ? (gx, gy) => {
+    const u = Math.min(0.999, Math.max(0, gx / gw)), v = Math.min(0.999, Math.max(0, gy / gh));
+    return DEPTH.data[(v * DEPTH.h | 0) * DEPTH.w + (u * DEPTH.w | 0)];
+  } : null;
+  const vDepth = (gx, gy) => {
+    const dd = (dAt(gx - 1, gy - 1) + dAt(gx, gy - 1) + dAt(gx - 1, gy) + dAt(gx, gy)) * 0.25;
+    const t = Math.min(1, dd / puffRef);                       // 0 at outline → 1 in the core
+    const shp = depthAt ? depthAt(gx, gy) : t;                 // real relief, or the uniform dome
+    const body = REL_DEPTH + (belly - REL_DEPTH) * shp;        // flat at puff 0, shaped when puffed
+    const x = Math.min(1, t / bevelW);
+    const rim = x * x * (3 - 2 * x);                           // smoothstep: soften the outline (keeps the seam closed)
+    return EDGE_DEPTH + (body - EDGE_DEPTH) * rim;
+  };
+
   const pos = [], uv = [], nor = [], col = [];
-  const d = REL_DEPTH;
   const X = (gx) => gx / gw * aspect;
   const Y = (gy) => 1 - gy / gh;
   const U = (gx) => gx / gw;
@@ -240,7 +304,8 @@ function buildGeometry(mask) {
     if (!occ[gy * gw + gx]) continue;
     const x0 = X(gx), x1 = X(gx + 1), y0 = Y(gy + 1), y1 = Y(gy);
     const u0 = U(gx), u1 = U(gx + 1), v0 = V(gy + 1), v1 = V(gy);
-    quad([x0, y0, d], [x1, y0, d], [x1, y1, d], [x0, y1, d], [0, 0, 1],
+    quad([x0, y0, vDepth(gx, gy + 1)], [x1, y0, vDepth(gx + 1, gy + 1)],
+         [x1, y1, vDepth(gx + 1, gy)], [x0, y1, vDepth(gx, gy)], [0, 0, 1],
          [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
   }
   const frontCount = pos.length / 3;
@@ -250,7 +315,8 @@ function buildGeometry(mask) {
     if (!occ[gy * gw + gx]) continue;
     const x0 = X(gx), x1 = X(gx + 1), y0 = Y(gy + 1), y1 = Y(gy);
     const u0 = U(gx), u1 = U(gx + 1), v0 = V(gy + 1), v1 = V(gy);
-    quad([x1, y0, -d], [x0, y0, -d], [x0, y1, -d], [x1, y1, -d], [0, 0, -1],
+    quad([x1, y0, -vDepth(gx + 1, gy + 1)], [x0, y0, -vDepth(gx, gy + 1)],
+         [x0, y1, -vDepth(gx, gy)], [x1, y1, -vDepth(gx + 1, gy)], [0, 0, -1],
          [[1 - u1, v0], [1 - u0, v0], [1 - u0, v1], [1 - u1, v1]]);
   }
   const backCount = pos.length / 3 - frontCount;
@@ -261,10 +327,13 @@ function buildGeometry(mask) {
     const x0 = X(gx), x1 = X(gx + 1), y0 = Y(gy + 1), y1 = Y(gy);
     const uv0 = [[0, 0], [0, 0], [0, 0], [0, 0]];
     const rc = rimColor(gx, gy);
-    if (!occAt(gx - 1, gy)) quad([x0, y0, -d], [x0, y1, -d], [x0, y1, d], [x0, y0, d], [-1, 0, 0], uv0, rc);
-    if (!occAt(gx + 1, gy)) quad([x1, y0, d], [x1, y1, d], [x1, y1, -d], [x1, y0, -d], [1, 0, 0], uv0, rc);
-    if (!occAt(gx, gy - 1)) quad([x0, y1, d], [x1, y1, d], [x1, y1, -d], [x0, y1, -d], [0, 1, 0], uv0, rc);
-    if (!occAt(gx, gy + 1)) quad([x0, y0, -d], [x1, y0, -d], [x1, y0, d], [x0, y0, d], [0, -1, 0], uv0, rc);
+    // wall depths at this cell's four grid corners (taper to a hairline at the outline)
+    const zTL = vDepth(gx, gy),     zTR = vDepth(gx + 1, gy);
+    const zBL = vDepth(gx, gy + 1), zBR = vDepth(gx + 1, gy + 1);
+    if (!occAt(gx - 1, gy)) quad([x0, y0, -zBL], [x0, y1, -zTL], [x0, y1, zTL], [x0, y0, zBL], [-1, 0, 0], uv0, rc);
+    if (!occAt(gx + 1, gy)) quad([x1, y0, zBR], [x1, y1, zTR], [x1, y1, -zTR], [x1, y0, -zBR], [1, 0, 0], uv0, rc);
+    if (!occAt(gx, gy - 1)) quad([x0, y1, zTL], [x1, y1, zTR], [x1, y1, -zTR], [x0, y1, -zTL], [0, 1, 0], uv0, rc);
+    if (!occAt(gx, gy + 1)) quad([x0, y0, -zBL], [x1, y0, -zBR], [x1, y0, zBR], [x0, y0, zBL], [0, -1, 0], uv0, rc);
   }
   const wallCount = pos.length / 3 - frontCount - backCount;
 
@@ -277,6 +346,9 @@ function buildGeometry(mask) {
   geo.addGroup(frontCount, backCount, 1);
   geo.addGroup(frontCount + backCount, wallCount, 2);
   geo.computeBoundingBox();
+  // triangle ranges, so painting can tell front skin from back from wall by faceIndex
+  // (the inflated rim tilts the face normals, so the old normal.z test no longer holds)
+  geo.userData.tris = { front: frontCount / 3, back: backCount / 3 };
   return geo;
 }
 
@@ -341,6 +413,7 @@ function loadImage(url) {
 
 async function loadCharacter(ch) {
   lastCh = ch;
+  DEPTH = null;                         // previous character's depth no longer applies
   setStatus(`loading ${ch.name}…`);
   try {
     const frontImg = await loadImage(ch.front);
@@ -351,8 +424,10 @@ async function loadCharacter(ch) {
     if (ch.back) { const backImg = await loadImage(ch.back); backSkin = new Skin((await maskImage(backImg)).base); }
     else { backSkin = new Skin(mask.base); }       // single sheet -> back mirrors the front
 
-    const frontMat = new THREE.MeshBasicMaterial({ map: frontSkin.tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
-    const backMat  = new THREE.MeshBasicMaterial({ map: backSkin.tex,  transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    // alphaToCoverage + the feathered matte = MSAA-antialiased cut edge (no staircase).
+    // transparent:false so it's an opaque cutout (depth-correct, no sorting halos).
+    const frontMat = new THREE.MeshBasicMaterial({ map: frontSkin.tex, transparent: false, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide });
+    const backMat  = new THREE.MeshBasicMaterial({ map: backSkin.tex,  transparent: false, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide });
     const edgeMat  = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });   // seam tinted from the art
     const mesh = new THREE.Mesh(geo, [frontMat, backMat, edgeMat]);
 
@@ -366,14 +441,51 @@ async function loadCharacter(ch) {
 
     disposeCurrent();
     scene.add(mesh);
-    current = { mesh, front: frontSkin, back: backSkin, size, s };
+    current = { mesh, front: frontSkin, back: backSkin, size, s, mask, tris: geo.userData.tris };
 
     floorUniforms.uFootR.value = Math.max(0.4, size.x * s * 0.6);
     if (boundsOn) rebuildBounds();
     frameModel(size.y * s);
     updateMeasure();
     setStatus(`${ch.name}${ch.back ? ' (front+back)' : ''} — drag the model to paint, drag the background to spin`);
+    if (useDepth) refreshDepth();        // re-derive real relief for the new character
   } catch (e) { console.error(e); setStatus('could not build that one: ' + e.message); }
+}
+
+// Re-extrude the current character at the live puff amount, keeping its painted
+// skins. Only the z-depth changes (x/y silhouette is identical), so the floor
+// placement and scale carry over untouched.
+function reextrude() {
+  if (!current || !current.mask) return;
+  const geo = buildGeometry(current.mask);
+  current.mesh.geometry.dispose();
+  current.mesh.geometry = geo;
+  current.tris = geo.userData.tris;
+  const bb = geo.boundingBox, size = new THREE.Vector3(); bb.getSize(size);
+  current.mesh.position.z = -((bb.min.z + bb.max.z) / 2) * current.s;
+  if (boundsOn) rebuildBounds();
+}
+
+// Run on-device AI depth on the current character's front sheet and re-extrude
+// with real per-pixel relief. Lazy-imports depth.js so nothing loads until used.
+async function refreshDepth() {
+  if (!lastCh || !current) return;
+  try {
+    const { depthMap } = await import('../assets/ml/depth.js?v=' + Math.floor(Date.now() / 86400000));
+    const img = await loadImage(lastCh.front);
+    const dm = await depthMap(img, setStatus);
+    const data = new Float32Array(dm.width * dm.height);
+    let lo = 1e9, hi = -1e9;
+    for (let i = 0; i < data.length; i++) { const v = dm.data[i] / 255; data[i] = v; if (v < lo) lo = v; if (v > hi) hi = v; }
+    const span = hi - lo || 1;
+    for (let i = 0; i < data.length; i++) data[i] = (data[i] - lo) / span;   // stretch to full 0..1
+    DEPTH = { w: dm.width, h: dm.height, data };
+    if (useDepth) reextrude();
+    setStatus('real depth on — puff to sculpt the relief');
+  } catch (e) {
+    console.error(e); setStatus('depth failed: ' + e.message);
+    useDepth = false; const b = document.getElementById('aidepth'); if (b) b.classList.remove('active');
+  }
 }
 
 function frameModel(height) {
@@ -423,9 +535,11 @@ function hitSkin(e) {
   pointerNDC(e);
   raycaster.setFromCamera(ndc, camera);
   const h = raycaster.intersectObject(current.mesh, false)[0];
-  if (!h || !h.uv || !h.face) return null;
-  if (Math.abs(h.face.normal.z) < 0.5) return null;            // ignore the thin side walls
-  return { uv: h.uv, skin: h.face.normal.z >= 0 ? current.front : current.back };
+  if (!h || !h.uv || h.faceIndex == null) return null;
+  const t = current.tris;                                      // front | back | wall, by triangle range
+  if (h.faceIndex < t.front) return { uv: h.uv, skin: current.front };
+  if (h.faceIndex < t.front + t.back) return { uv: h.uv, skin: current.back };
+  return null;                                                 // a side-wall hit — don't paint the rim
 }
 function paintAt(uv, skin) {
   const x = uv.x * skin.w, y = (1 - uv.y) * skin.h;
@@ -497,6 +611,25 @@ function syncTool() {
   $('color').value = tool.color;
   document.querySelectorAll('.swatch').forEach(s => s.classList.toggle('active', !tool.erase && s.dataset.c.toLowerCase() === tool.color.toLowerCase()));
 }
+// Edge: round the crusty rim (stays flat). Puff: optional volume. Both re-extrude live.
+$('bevel').addEventListener('input', (e) => {
+  bevelAmt = +e.target.value / 100;
+  $('bevelVal').textContent = e.target.value + '%';
+  reextrude();
+});
+$('puff').addEventListener('input', (e) => {
+  puffAmt = +e.target.value / 100;
+  $('puffVal').textContent = e.target.value + '%';
+  reextrude();
+});
+// Real depth (AI): swap the uniform bulge for the character's actual relief.
+$('aidepth').addEventListener('click', () => {
+  useDepth = !useDepth;
+  $('aidepth').classList.toggle('active', useDepth);
+  if (useDepth && !DEPTH) refreshDepth();
+  else reextrude();
+});
+
 $('clear').addEventListener('click', () => { if (current) { current.front.clearPaint(); current.back.clearPaint(); } });
 $('reset').addEventListener('click', () => { if (current) frameModel(current.size.y * current.s); });
 

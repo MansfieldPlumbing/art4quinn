@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>flickpaint3d — art4quinn</title>
 
+<!-- Installable PWA -->
+<link rel="manifest" href="../manifest.webmanifest" />
+<meta name="theme-color" content="#0f1118" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="art4quinn" />
+<link rel="apple-touch-icon" href="../assets/icons/icon-180.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="../assets/icons/icon-192.png" />
+<script src="../assets/pwa-register.js"></script>
+
 <!-- Shared hand-made glass chrome (cobalt refresh). Same UI as FlickPaint 2D. -->
 <link rel="stylesheet" href="../assets/flickpaint-ui.css">
 <style>
@@ -123,6 +132,15 @@
     <h3 class="section" style="margin-bottom:8px">Silhouette</h3>
     <button class="btn-soft" id="aicut" title="Use AI to cut the subject from any background"
             style="width:100%;margin-bottom:16px">✨ AI cut-out</button>
+    <h3 class="section" style="margin-bottom:8px">Shape</h3>
+    <label class="field-label">Edge <span id="bevelVal" class="mono" style="float:right;color:#fff">40%</span></label>
+    <input type="range" id="bevel" min="0" max="100" value="40" style="width:100%;margin-bottom:12px"
+           title="Round the outline — kills the crusty hard rim. Stays flat; just softens the edge.">
+    <label class="field-label">Puff <span id="puffVal" class="mono" style="float:right;color:#fff">0%</span></label>
+    <input type="range" id="puff" min="0" max="100" value="0" style="width:100%;margin-bottom:12px"
+           title="Optional volume — inflate the flat shape into a rounded body. Leave at 0 to stay 2D.">
+    <button class="btn-soft" id="aidepth" title="Use on-device AI depth so the body follows the character's real shape, not a uniform bulge"
+            style="width:100%;margin-bottom:16px">🧊 Real depth (AI)</button>
     <h3 class="section" style="margin-bottom:8px">Floor
       <span id="measure" class="mono" style="font-weight:400;text-transform:none;letter-spacing:0;color:rgba(255,255,255,0.5)"></span>
     </h3>
