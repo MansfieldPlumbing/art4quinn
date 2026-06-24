@@ -20,6 +20,8 @@ const BG_TOL        = 46;
 const ISLAND_FRAC   = 0.03;   // drop silhouette islands smaller than 3% of the biggest part
 let   puffAmt       = 0.0;    // body volume: 0 = stays flat 2D, 1 = fully inflated pillow ("Puff")
 let   bevelAmt      = 0.4;    // edge rounding: 0 = tight crisp edge, 1 = broad soft round ("Edge")
+let   useDepth      = false;  // when on, real AI depth drives the relief instead of a uniform bulge
+let   DEPTH         = null;   // { w, h, data:Float32Array(0..1) } normalised depth for the current character
 
 // ---------------------------------------------------------------- scene
 const viewport = document.getElementById('viewport');
@@ -255,12 +257,19 @@ function buildGeometry(mask) {
   //     at ANY puff, so you can have a flat shape with clean soft edges.
   const belly  = REL_DEPTH + (MAX_PUFF - REL_DEPTH) * puffAmt;  // mid thickness when puffed
   const bevelW = 0.04 + 0.56 * bevelAmt;                        // edge-round width (frac. of depth-to-core)
+  // Real-depth mode: sample the AI depth map (0..1, higher = closer) per grid vertex,
+  // so the belly follows the character's actual relief instead of a uniform bulge.
+  const depthAt = (useDepth && DEPTH) ? (gx, gy) => {
+    const u = Math.min(0.999, Math.max(0, gx / gw)), v = Math.min(0.999, Math.max(0, gy / gh));
+    return DEPTH.data[(v * DEPTH.h | 0) * DEPTH.w + (u * DEPTH.w | 0)];
+  } : null;
   const vDepth = (gx, gy) => {
     const dd = (dAt(gx - 1, gy - 1) + dAt(gx, gy - 1) + dAt(gx - 1, gy) + dAt(gx, gy)) * 0.25;
     const t = Math.min(1, dd / puffRef);                       // 0 at outline → 1 in the core
-    const body = REL_DEPTH + (belly - REL_DEPTH) * t;          // flat at puff 0, domed when puffed
+    const shp = depthAt ? depthAt(gx, gy) : t;                 // real relief, or the uniform dome
+    const body = REL_DEPTH + (belly - REL_DEPTH) * shp;        // flat at puff 0, shaped when puffed
     const x = Math.min(1, t / bevelW);
-    const rim = x * x * (3 - 2 * x);                           // smoothstep: soften the outline
+    const rim = x * x * (3 - 2 * x);                           // smoothstep: soften the outline (keeps the seam closed)
     return EDGE_DEPTH + (body - EDGE_DEPTH) * rim;
   };
 
@@ -404,6 +413,7 @@ function loadImage(url) {
 
 async function loadCharacter(ch) {
   lastCh = ch;
+  DEPTH = null;                         // previous character's depth no longer applies
   setStatus(`loading ${ch.name}…`);
   try {
     const frontImg = await loadImage(ch.front);
@@ -438,6 +448,7 @@ async function loadCharacter(ch) {
     frameModel(size.y * s);
     updateMeasure();
     setStatus(`${ch.name}${ch.back ? ' (front+back)' : ''} — drag the model to paint, drag the background to spin`);
+    if (useDepth) refreshDepth();        // re-derive real relief for the new character
   } catch (e) { console.error(e); setStatus('could not build that one: ' + e.message); }
 }
 
@@ -453,6 +464,28 @@ function reextrude() {
   const bb = geo.boundingBox, size = new THREE.Vector3(); bb.getSize(size);
   current.mesh.position.z = -((bb.min.z + bb.max.z) / 2) * current.s;
   if (boundsOn) rebuildBounds();
+}
+
+// Run on-device AI depth on the current character's front sheet and re-extrude
+// with real per-pixel relief. Lazy-imports depth.js so nothing loads until used.
+async function refreshDepth() {
+  if (!lastCh || !current) return;
+  try {
+    const { depthMap } = await import('../assets/ml/depth.js?v=' + Math.floor(Date.now() / 86400000));
+    const img = await loadImage(lastCh.front);
+    const dm = await depthMap(img, setStatus);
+    const data = new Float32Array(dm.width * dm.height);
+    let lo = 1e9, hi = -1e9;
+    for (let i = 0; i < data.length; i++) { const v = dm.data[i] / 255; data[i] = v; if (v < lo) lo = v; if (v > hi) hi = v; }
+    const span = hi - lo || 1;
+    for (let i = 0; i < data.length; i++) data[i] = (data[i] - lo) / span;   // stretch to full 0..1
+    DEPTH = { w: dm.width, h: dm.height, data };
+    if (useDepth) reextrude();
+    setStatus('real depth on — puff to sculpt the relief');
+  } catch (e) {
+    console.error(e); setStatus('depth failed: ' + e.message);
+    useDepth = false; const b = document.getElementById('aidepth'); if (b) b.classList.remove('active');
+  }
 }
 
 function frameModel(height) {
@@ -588,6 +621,13 @@ $('puff').addEventListener('input', (e) => {
   puffAmt = +e.target.value / 100;
   $('puffVal').textContent = e.target.value + '%';
   reextrude();
+});
+// Real depth (AI): swap the uniform bulge for the character's actual relief.
+$('aidepth').addEventListener('click', () => {
+  useDepth = !useDepth;
+  $('aidepth').classList.toggle('active', useDepth);
+  if (useDepth && !DEPTH) refreshDepth();
+  else reextrude();
 });
 
 $('clear').addEventListener('click', () => { if (current) { current.front.clearPaint(); current.back.clearPaint(); } });

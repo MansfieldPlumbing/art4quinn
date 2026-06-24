@@ -1,13 +1,14 @@
 # assets/ml — on-device ML harness
 
-Shared, build-free ML for art4quinn. Three modules power the AI tools across the
+Shared, build-free ML for art4quinn. These modules power the AI tools across the
 apps:
 
 - `segment.js` — **background erase / cut-out** (RMBG-1.4). Used by paint, three, gallery.
 - `select.js` — **AI Magic Wand**: tap-to-select an object (SlimSAM). Used by paint.
 - `inpaint.js` — **Magic Eraser**: content-aware fill / object removal (LaMa, onnxruntime-web). Used by paint.
+- `depth.js` — **Real depth**: monocular depth (Depth Anything V2 small) → per-pixel relief. Used by three (3D studio).
 
-All three follow the same memory-safe pattern (downscale before inference, GPU
+All follow the same memory-safe pattern (downscale before inference, GPU
 compositing, single-job lock, `dispose*()` to free memory). `select.js`/`inpaint.js`
 chain through paint's existing selection: the Wand makes a mask selection, the
 Eraser consumes it.
