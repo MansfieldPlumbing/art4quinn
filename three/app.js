@@ -139,7 +139,17 @@ function processImage(img) {
   for (let p = 0; p < w * h; p++) {
     const i = p * 4;
     out.data[i] = px[i]; out.data[i + 1] = px[i + 1]; out.data[i + 2] = px[i + 2];
-    out.data[i + 3] = isBg[p] ? 0 : 255;
+    // Antialias the cut edge: alpha = fraction of the 3x3 neighbourhood that is
+    // foreground, so the binary flood-fill boundary becomes a 1px gradient that
+    // MSAA/alphaToCoverage can resolve (kills the staircase on the silhouette).
+    const x = p % w, y = (p - x) / w;
+    let fg = 0, tot = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      tot++; if (!isBg[ny * w + nx]) fg++;
+    }
+    out.data[i + 3] = Math.round(255 * fg / tot);
   }
   bctx.putImageData(out, 0, 0);
   return { w, h, isBg, base };
@@ -163,7 +173,9 @@ async function processImageAI(img) {
     const mx = Math.min(m.width - 1, Math.floor((x + 0.5) / w * m.width));
     const my = Math.min(m.height - 1, Math.floor((y + 0.5) / h * m.height));
     const p = y * w + x;
-    if (m.data[my * m.width + mx] < 128) { isBg[p] = 1; d[p * 4 + 3] = 0; } else { d[p * 4 + 3] = 255; }
+    const a = m.data[my * m.width + mx];          // RMBG gives a soft 0..255 matte
+    isBg[p] = a < 128 ? 1 : 0;                     // binary for geometry occupancy
+    d[p * 4 + 3] = a;                              // but keep the soft alpha → antialiased edge
   }
   bctx.putImageData(id, 0, 0);
   return { w, h, isBg, base };
@@ -402,8 +414,10 @@ async function loadCharacter(ch) {
     if (ch.back) { const backImg = await loadImage(ch.back); backSkin = new Skin((await maskImage(backImg)).base); }
     else { backSkin = new Skin(mask.base); }       // single sheet -> back mirrors the front
 
-    const frontMat = new THREE.MeshBasicMaterial({ map: frontSkin.tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
-    const backMat  = new THREE.MeshBasicMaterial({ map: backSkin.tex,  transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    // alphaToCoverage + the feathered matte = MSAA-antialiased cut edge (no staircase).
+    // transparent:false so it's an opaque cutout (depth-correct, no sorting halos).
+    const frontMat = new THREE.MeshBasicMaterial({ map: frontSkin.tex, transparent: false, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide });
+    const backMat  = new THREE.MeshBasicMaterial({ map: backSkin.tex,  transparent: false, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide });
     const edgeMat  = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });   // seam tinted from the art
     const mesh = new THREE.Mesh(geo, [frontMat, backMat, edgeMat]);
 
