@@ -116,6 +116,16 @@ export async function selectAt(srcCanvas, x, y, key, onStatus) {
   finally { _busy = false; }
 }
 
+// Interactive multi-point select: pts in srcCanvas px, labels 1=include / 0=exclude.
+// Re-runs the (cheap) mask decoder against the cached embedding, so each extra tap
+// refines the SAME object — this is how "tap, then +/- to keep tapping" should work.
+export async function selectPoints(srcCanvas, pts, labels, key, onStatus) {
+  if (_busy) throw new Error('wand is busy');
+  _busy = true;
+  try { return await withWasmFallback(() => _pointsInfer(srcCanvas, pts, labels, key, onStatus), onStatus); }
+  finally { _busy = false; }
+}
+
 // Lasso points (srcCanvas px) -> snap to the object the user roughly outlined.
 // Prompts SAM at the lasso centroid, then picks the proposal that best OVERLAPS the
 // lasso — so a small outline yields a small object, not a big background region.
@@ -136,15 +146,40 @@ async function _selectInfer(srcCanvas, x, y, key, onStatus) {
   return _decode(srcCanvas, await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes), outputs.iou_scores.data);
 }
 
+async function _pointsInfer(srcCanvas, pts, labels, key, onStatus) {
+  const { T, model, processor } = await ensure(onStatus);
+  await primeSelector(srcCanvas, key, onStatus);
+  onStatus && onStatus(pts.length > 1 ? 'refining…' : 'selecting…');
+  const N = pts.length, coords = [];
+  for (const p of pts) coords.push(p.x * _scale, p.y * _scale);
+  const input_points = new T.Tensor('float32', coords, [1, 1, N, 2]);
+  const input_labels = new T.Tensor('int64', labels.map((l) => BigInt(l)), [1, 1, N]);
+  const outputs = await model({ ..._emb.emb, input_points, input_labels });
+  const masks = await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes);
+  return _decode(srcCanvas, masks, outputs.iou_scores.data);
+}
+
 async function _lassoInfer(srcCanvas, pts, key, onStatus) {
   const { T, model, processor } = await ensure(onStatus);
   await primeSelector(srcCanvas, key, onStatus);
   onStatus && onStatus('snapping to object…');
-  let cx = 0, cy = 0; for (const p of pts) { cx += p.x; cy += p.y; } cx /= pts.length; cy /= pts.length;
+  let cx = 0, cy = 0, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) { cx += p.x; cy += p.y; if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
+  cx /= pts.length; cy /= pts.length;
+  // A BOX prompt (the lasso's bounding box) is SAM's strongest "the object is in here"
+  // cue — far more reliable than a centroid point alone. Pair them; if an export rejects
+  // boxes, fall back to the point. Then pick the proposal that best fits the drawn outline.
   const input_points = new T.Tensor('float32', [cx * _scale, cy * _scale], [1, 1, 1, 2]);
   const input_labels = new T.Tensor('int64', [1n], [1, 1, 1]);
-  const outputs = await model({ ..._emb.emb, input_points, input_labels });
-  const masks = await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes);
+  const input_boxes = new T.Tensor('float32', [minX * _scale, minY * _scale, maxX * _scale, maxY * _scale], [1, 1, 4]);
+  let masks;
+  try {
+    const outputs = await model({ ..._emb.emb, input_points, input_labels, input_boxes });
+    masks = await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes);
+  } catch (_) {
+    const outputs = await model({ ..._emb.emb, input_points, input_labels });
+    masks = await processor.post_process_masks(outputs.pred_masks, _emb.vision.original_sizes, _emb.vision.reshaped_input_sizes);
+  }
   return _decodeByLasso(srcCanvas, masks[0], pts);
 }
 

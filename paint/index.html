@@ -610,26 +610,27 @@ reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
 
 // AI selection — one tool, four modes. The selection is the SINGLE source of truth
 // (doc('selection')); every edit goes through the app's History/undo. No private stack.
-//   tap    = SAM point prompt        lasso = SAM box prompt (snap) or raw outline
-//   add    = brush into the mask     remove = brush out of the mask
+//   tap = first SAM point (new object)   add = tap more +points   remove = tap -points
+//   lasso (= AI Lasso tool) = box prompt -> snap to the object
 let aiMode = 'tap', _lasso = null, _stroke = null, aiSnap = true;
 let eraseReview = false;   // true once an object is AI-selected → show the erase preview + action bar
+let _aiPts = [];           // accumulated SAM prompts [{x,y,label}] — label 1=include, 0=exclude
 // keep lasso points on the image: out-of-bounds rides the edge instead of going chaotic (Samsung-style)
 function clampToCanvas(pt, cv) { return { x: Math.max(0, Math.min(cv.width, pt.x)), y: Math.max(0, Math.min(cv.height, pt.y)), pressure: pt.pressure }; }
 const SEL_CAP = 1280;   // selection mask works at a light resolution; scaled up to erase/draw
 reg({ id: 'airefine', name: 'AI Select', type: 'select', cursor: 'crosshair',
   onPointerDown(pt, c) {
-    if (aiMode === 'tap') { aiTap(pt, c); return; }
     if (aiMode === 'lasso') { _lasso = [clampToCanvas(pt, c.canvas)]; strokePreview(_lasso); return; }
-    pushUndo(); _stroke = blankSelMask(c.canvas, true); strokePaint(pt, c, aiMode === 'remove'); strokePreview();
+    const p = clampToCanvas(pt, c.canvas);
+    if (aiMode === 'tap') _aiPts = [];                                  // tap starts a fresh object
+    _aiPts.push({ x: p.x, y: p.y, label: aiMode === 'remove' ? 0 : 1 }); // tap/add = include, remove = exclude
+    aiPointsCommit(c);
   },
   onPointerMove(pt, c) {
     if (aiMode === 'lasso' && _lasso) { _lasso.push(clampToCanvas(pt, c.canvas)); strokePreview(_lasso); }
-    else if ((aiMode === 'add' || aiMode === 'remove') && _stroke) { strokePaint(pt, c, aiMode === 'remove'); strokePreview(); }
   },
   onPointerUp(pt, c) {
     if (aiMode === 'lasso' && _lasso) { const pts = _lasso; _lasso = null; if (pts.length > 2) aiLassoCommit(pts, c); else renderSelection(); }
-    else if ((aiMode === 'add' || aiMode === 'remove') && _stroke) { publishSelMask(_stroke, c.canvas); _stroke = null; }
   } });
 
 // Crop = resize the document to the drawn rect. Drag a box (it can be BIGGER than the
@@ -1198,7 +1199,8 @@ function buildTop() {
         </div>
       </div>
     </div>
-    <div class="row" style="gap:10px">
+    <div class="row" style="gap:8px">
+      <button class="iconbtn" id="d-picker" title="Eyedropper — pick a colour off the canvas" style="width:32px;height:32px">${icon('pipette')}</button>
       <div style="position:relative">
         <button class="iconbtn" id="d-color" title="Color" style="width:32px;height:32px;border:2px solid rgba(255,255,255,0.2)"></button>
         <div class="dropdown mica-panel" id="dd-color" style="right:0;top:100%;margin-top:10px;border-radius:24px;padding:16px">
@@ -1224,6 +1226,7 @@ function buildTop() {
   $('#d-undo').onclick = () => History.undo();
   $('#d-redo').onclick = () => History.redo();
   $('#d-stick').onclick = () => setSession('thumbstickEnabled', !session('thumbstickEnabled'));
+  $('#d-picker').onclick = () => setSession('tool', 'picker');
 
   const toggleDD = (id) => { const open = $(id).classList.contains('on'); document.querySelectorAll('.dropdown').forEach((d) => d.classList.remove('on')); if (!open) $(id).classList.add('on'); };
   $('#d-brush').onclick = (e) => { e.stopPropagation(); toggleDD('#dd-brush'); };
@@ -1763,6 +1766,23 @@ async function aiTap(pt, c) {                          // SAM point prompt
   } catch (e) { console.error(e); hud('Wand failed — ' + (e.message || e)); }
   finally { aiBusy = false; }
 }
+// Interactive point select — runs the current accumulated points through SAM and REPLACES
+// the selection with the result. Each extra +/- tap refines the same object.
+async function aiPointsCommit(c) {
+  if (aiBusy) { hud('AI is busy — one moment…'); return; }
+  aiNoticeOnce(); aiBusy = true; hud(_aiPts.length > 1 ? 'Refining…' : 'Selecting…');
+  try {
+    const { selectPoints } = await import('../assets/ml/select.js' + ML_V);
+    const key = doc('activeLayerId') + ':' + c.canvas.width + 'x' + c.canvas.height;
+    const pts = _aiPts.map((p) => ({ x: p.x, y: p.y })), labels = _aiPts.map((p) => p.label);
+    const { mask, any } = await selectPoints(c.canvas, pts, labels, key, (s) => hud(s));
+    if (!any) { _aiPts.pop(); hud('Nothing there — tap on the object'); return; }   // drop the unhelpful point
+    const m = blankSelMask(c.canvas, false); m.getContext('2d').drawImage(mask, 0, 0, m.width, m.height);
+    eraseReview = true; pushUndo(); publishSelMask(m, c.canvas);
+    hud(_aiPts.length > 1 ? 'Refined ✨ — keep tapping ＋/－, or Erase' : 'Selected ✨ — ＋ / － to refine, or Erase');
+  } catch (e) { console.error(e); _aiPts.pop(); hud('Wand failed — ' + (e.message || e)); }
+  finally { aiBusy = false; }
+}
 // start encoding the image in the background so the snap is ready by the time the loop is drawn
 function aiPrewarm(srcCanvas) {
   if (aiBusy) return;
@@ -1785,6 +1805,8 @@ async function aiLassoCommit(pts, c, snap = aiSnap) {  // lasso -> SAM object sn
     finally { aiBusy = false; }
   } else { drawLassoInto(incoming, pts, c); }
   eraseReview = true; compositeSel(incoming, selMode(), c.canvas);
+  // seed the point session at the outline centroid so a follow-up ＋/－ tap keeps THIS object
+  let cx = 0, cy = 0; for (const p of pts) { cx += p.x; cy += p.y; } _aiPts = [{ x: cx / pts.length, y: cy / pts.length, label: 1 }];
 }
 function selectionToMask(sel, W, H) {                   // -> layer-size HARD-edged mask
   if (!sel) return null;
@@ -1803,7 +1825,7 @@ function selectionToMask(sel, W, H) {                   // -> layer-size HARD-ed
   g.putImageData(id, 0, 0);
   return m;
 }
-function aiClearSel() { eraseReview = false; if (doc('selection')) { pushUndo(); setSelection(null); } else updateEraseBar(); }
+function aiClearSel() { eraseReview = false; _aiPts = []; if (doc('selection')) { pushUndo(); setSelection(null); } else updateEraseBar(); }
 
 /* ---- Object-eraser staged action bar: Undo/Redo · Add/Remove refine · Erase CTA ---- */
 function initEraseBar() {
@@ -1812,7 +1834,7 @@ function initEraseBar() {
   $('#eb-redo').onclick = () => History.redo();
   const setRefine = (mode) => {
     eraseReview = true; aiMode = mode; setSession('tool', 'airefine');
-    hud(mode === 'add' ? 'Add — brush over what to include' : 'Remove — brush over what to drop');
+    hud(mode === 'add' ? 'Add — tap parts to include' : 'Remove — tap parts to drop');
     updateEraseBar();
   };
   $('#eb-add').onclick = () => setRefine('add');
