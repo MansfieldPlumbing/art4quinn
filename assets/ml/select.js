@@ -19,8 +19,13 @@
 // ---------------------------------------------------------------------------
 
 const CDN = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4';
-const MODEL = 'Xenova/slimsam-77-uniform';
+// Quality first: full SAM ViT-B (fp16 ≈189MB on WebGPU) gives much cleaner masks than the
+// tiny SlimSAM-77. If it can't load (low memory / no fp16 support) we fall back to SlimSAM.
+const MODELS_GPU  = [['Xenova/sam-vit-base', 'fp16'], ['Xenova/slimsam-77-uniform', 'fp32']];
+// No WebGPU → CPU: prefer the tiny fast SlimSAM (ViT-B on wasm would be painfully slow).
+const MODELS_WASM = [['Xenova/slimsam-77-uniform', 'q8'], ['Xenova/sam-vit-base', 'q8']];
 const MAX_IN = 1024;
+let _activeModel = null;
 
 let _ready = null, _busy = false;
 let _forceWasm = (() => { try { return localStorage.getItem('a4q-ml-wasm') === '1'; } catch (_) { return false; } })();
@@ -39,31 +44,41 @@ async function withWasmFallback(run, onStatus) {
   }
 }
 
+// Byte-aggregated download progress across a model's many files (each else reports 0→100%
+// separately, which looks like it's downloading several times). One fresh aggregator per try.
+function makeProgress(onStatus) {
+  const dl = new Map(); let last = -1;
+  return (p) => {
+    if (!onStatus || !p || !p.file) return;
+    if (p.status === 'progress' && typeof p.loaded === 'number' && typeof p.total === 'number' && p.total > 0) dl.set(p.file, { loaded: p.loaded, total: p.total });
+    else if (p.status === 'done' && dl.has(p.file)) { const e = dl.get(p.file); dl.set(p.file, { loaded: e.total, total: e.total }); }
+    else return;
+    let l = 0, t = 0; for (const v of dl.values()) { l += v.loaded; t += v.total; }
+    if (t <= 0) return;
+    const pct = Math.min(100, Math.round(l / t * 100));
+    if (pct !== last) { last = pct; onStatus(`downloading wand ${pct}%`); }
+  };
+}
 async function ensure(onStatus) {
   if (_ready) return _ready;
   _ready = (async () => {
     const device = (!_forceWasm && typeof navigator !== 'undefined' && navigator.gpu) ? 'webgpu' : 'wasm';
-    onStatus && onStatus('loading magic wand…');
     const T = await import(/* @vite-ignore */ CDN);
     T.env.allowLocalModels = false;
-    const dtype = device === 'webgpu' ? 'fp32' : 'q8';   // SlimSAM has no fp16 export -> fp32 on webgpu
-    // SlimSAM ships as several files (vision encoder + mask decoder); Transformers.js
-    // fires progress PER FILE, each sweeping 0→100% — which looks like the model is
-    // downloading twice. Aggregate by bytes across every file into one smooth bar.
-    const _dl = new Map(); let _lastPct = -1;
-    const progress_callback = (p) => {
-      if (!onStatus || !p || !p.file) return;
-      if (p.status === 'progress' && typeof p.loaded === 'number' && typeof p.total === 'number' && p.total > 0) _dl.set(p.file, { loaded: p.loaded, total: p.total });
-      else if (p.status === 'done' && _dl.has(p.file)) { const e = _dl.get(p.file); _dl.set(p.file, { loaded: e.total, total: e.total }); }
-      else return;
-      let l = 0, t = 0; for (const v of _dl.values()) { l += v.loaded; t += v.total; }
-      if (t <= 0) return;
-      const pct = Math.min(100, Math.round(l / t * 100));
-      if (pct !== _lastPct) { _lastPct = pct; onStatus(`downloading wand ${pct}%`); }
-    };
-    const model = await T.SamModel.from_pretrained(MODEL, { device, dtype, progress_callback });
-    const processor = await T.AutoProcessor.from_pretrained(MODEL, { progress_callback });
-    return { T, model, processor };
+    const candidates = device === 'webgpu' ? MODELS_GPU : MODELS_WASM;
+    let lastErr;
+    for (let i = 0; i < candidates.length; i++) {
+      const [MODEL, dtype] = candidates[i];
+      try {
+        onStatus && onStatus(i === 0 ? 'loading magic wand…' : 'loading a lighter model…');
+        const progress_callback = makeProgress(onStatus);
+        const model = await T.SamModel.from_pretrained(MODEL, { device, dtype, progress_callback });
+        const processor = await T.AutoProcessor.from_pretrained(MODEL, { progress_callback });
+        _activeModel = MODEL;
+        return { T, model, processor };
+      } catch (e) { console.warn('[wand] could not load', MODEL, dtype, '—', (e && e.message) || e); lastErr = e; }
+    }
+    throw lastErr || new Error('no SAM model could load');
   })().catch((e) => { _ready = null; throw e; });
   return _ready;
 }
@@ -183,13 +198,51 @@ async function _lassoInfer(srcCanvas, pts, key, onStatus) {
   return _decodeByLasso(srcCanvas, masks[0], pts);
 }
 
-// build a srcCanvas-size output mask + bounds from one proposal plane
+// Clean a binary proposal: keep only the LARGEST connected blob (kills stray specks) and
+// fill enclosed holes. Returns a Uint8Array(W*H) of 0/1. Big quality win on noisy masks.
+function cleanPlane(data, off, W, H) {
+  const n = W * H, bin = new Uint8Array(n);
+  for (let i = 0; i < n; i++) bin[i] = data[off + i] ? 1 : 0;
+  const lbl = new Int32Array(n), q = new Int32Array(n);
+  let cur = 0, best = 0, bestSize = 0;
+  for (let s = 0; s < n; s++) {
+    if (!bin[s] || lbl[s]) continue;
+    cur++; let head = 0, tail = 0, size = 0; q[tail++] = s; lbl[s] = cur;
+    while (head < tail) {
+      const ci = q[head++]; size++; const cx = ci % W, cy = (ci / W) | 0;
+      if (cx > 0     && bin[ci - 1] && !lbl[ci - 1]) { lbl[ci - 1] = cur; q[tail++] = ci - 1; }
+      if (cx < W - 1 && bin[ci + 1] && !lbl[ci + 1]) { lbl[ci + 1] = cur; q[tail++] = ci + 1; }
+      if (cy > 0     && bin[ci - W] && !lbl[ci - W]) { lbl[ci - W] = cur; q[tail++] = ci - W; }
+      if (cy < H - 1 && bin[ci + W] && !lbl[ci + W]) { lbl[ci + W] = cur; q[tail++] = ci + W; }
+    }
+    if (size > bestSize) { bestSize = size; best = cur; }
+  }
+  const out = new Uint8Array(n);
+  if (!best) return out;
+  for (let i = 0; i < n; i++) out[i] = lbl[i] === best ? 1 : 0;
+  // flood background in from the borders; any background NOT reached is an enclosed hole -> fill
+  const bg = new Uint8Array(n); let head = 0, tail = 0;
+  const seed = (i) => { if (!out[i] && !bg[i]) { bg[i] = 1; q[tail++] = i; } };
+  for (let x = 0; x < W; x++) { seed(x); seed((H - 1) * W + x); }
+  for (let y = 0; y < H; y++) { seed(y * W); seed(y * W + W - 1); }
+  while (head < tail) {
+    const ci = q[head++]; const cx = ci % W, cy = (ci / W) | 0;
+    if (cx > 0     && !out[ci - 1] && !bg[ci - 1]) { bg[ci - 1] = 1; q[tail++] = ci - 1; }
+    if (cx < W - 1 && !out[ci + 1] && !bg[ci + 1]) { bg[ci + 1] = 1; q[tail++] = ci + 1; }
+    if (cy > 0     && !out[ci - W] && !bg[ci - W]) { bg[ci - W] = 1; q[tail++] = ci - W; }
+    if (cy < H - 1 && !out[ci + W] && !bg[ci + W]) { bg[ci + W] = 1; q[tail++] = ci + W; }
+  }
+  for (let i = 0; i < n; i++) if (!out[i] && !bg[i]) out[i] = 1;
+  return out;
+}
+// build a srcCanvas-size output mask + bounds from one proposal plane (cleaned)
 function _buildMask(srcCanvas, data, off, W, H) {
+  const bin = cleanPlane(data, off, W, H);
   const mc = document.createElement('canvas'); mc.width = W; mc.height = H;
   const mctx = mc.getContext('2d'); const id = mctx.createImageData(W, H);
   let minX = W, minY = H, maxX = 0, maxY = 0, any = false;
   for (let i = 0; i < W * H; i++) {
-    if (data[off + i]) {
+    if (bin[i]) {
       id.data[i * 4 + 3] = 255; any = true;
       const cx = i % W, cy = (i / W) | 0;
       if (cx < minX) minX = cx; if (cx > maxX) maxX = cx; if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
