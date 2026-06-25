@@ -6,10 +6,16 @@
 <title>A4Q · art4quinn</title>
 <meta name="description" content="art4quinn — Quinn's studio for drawing, sculpting in 3D, and her gallery." />
 
-<!-- Evict the dead "Magic Eraser" PWA service worker + caches so the new site is served. -->
+<!-- Service worker: keeps the app auto-updating (network-first shell) while caching the
+     heavy CDN libs + models persistently, so they download once and survive updates. -->
 <script>
-  if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(()=>{});
-  if (window.caches && caches.keys) caches.keys().then(ks => ks.forEach(k => caches.delete(k))).catch(()=>{});
+  if ('serviceWorker' in navigator) {
+    addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').then((reg) => {
+        setInterval(() => reg.update(), 60 * 60 * 1000);   // check for a new version hourly
+      }).catch(() => {});
+    });
+  }
 </script>
 
 <style>

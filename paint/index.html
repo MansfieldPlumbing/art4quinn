@@ -10,6 +10,16 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Pro Paint Shop" />
+<script>
+  /* Auto-updating SW (root scope) — fresh app shell, persistent CDN/model cache. */
+  if ('serviceWorker' in navigator) {
+    addEventListener('load', () => {
+      navigator.serviceWorker.register('../sw.js').then((reg) => {
+        setInterval(() => reg.update(), 60 * 60 * 1000);
+      }).catch(() => {});
+    });
+  }
+</script>
 <link rel="apple-touch-icon" href="../assets/icons/icon-180.png" />
 <link rel="icon" type="image/png" sizes="192x192" href="../assets/icons/icon-192.png" />
 
@@ -499,7 +509,7 @@ reg({ id: 'picker', name: 'Color Picker', type: 'system', cursor: 'crosshair',
   },
   onPointerDown(pt, c) { this._pick(pt, c); },
   onPointerMove(pt, c) { if (pt.pressure === 0) return; this._pick(pt, c); },
-  onPointerUp() {} });
+  onPointerUp() { if (_toolPrev && _toolPrev !== 'picker') setSession('tool', _toolPrev); } });   // eyedropper is transient → snap back
 
 reg({ id: 'move', name: 'Move', type: 'select', cursor: 'move',
   _start: null, _float: null, _bg: null, _sel: null, _dx: 0, _dy: 0,
@@ -615,6 +625,7 @@ reg({ id: 'magic', name: 'Magic Wand', type: 'select', cursor: 'default',
 let aiMode = 'tap', _lasso = null, _stroke = null, aiSnap = true;
 let eraseReview = false;   // true once an object is AI-selected → show the erase preview + action bar
 let _aiPts = [];           // accumulated SAM prompts [{x,y,label}] — label 1=include, 0=exclude
+let _toolPrev = 'brush';   // last non-picker tool, so the eyedropper can snap back to it
 // keep lasso points on the image: out-of-bounds rides the edge instead of going chaotic (Samsung-style)
 function clampToCanvas(pt, cv) { return { x: Math.max(0, Math.min(cv.width, pt.x)), y: Math.max(0, Math.min(cv.height, pt.y)), pressure: pt.pressure }; }
 const SEL_CAP = 1280;   // selection mask works at a light resolution; scaled up to erase/draw
@@ -2002,6 +2013,7 @@ function boot() {
   buildLeft(); buildRight(); buildTop(); buildBottom(); buildAssets();
   initEngine(); initShell(); initStick(); initEraseBar();
   bind(P.doc, updateEraseBar); bind(P.session, updateEraseBar);   // bar follows selection + tool/undo state
+  bind(P.session, () => { const t = session('tool'); if (t && t !== 'picker') _toolPrev = t; });   // remember tool before the eyedropper
   paintIcons();
 
   History.clear(); pushUndo();
